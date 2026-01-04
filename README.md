@@ -28,16 +28,13 @@ make environmental-plan
 # Apply
 make environmental-apply
 
-# Get nameservers for Porkbun
+# Get nameservers
 terraform -chdir=terraform/environmental output nameservers
 ```
 
-## Post-Apply
+## DNS
 
-Copy the 4 nameservers to Porkbun:
-1. Login to Porkbun → Domain → francescoalbanese.dev
-2. DNS → Authoritative Nameservers
-3. Replace default NS with Route53 NS
+Domain purchased from Porkbun, NS records pointed to AWS Route53.
 
 ## Destroy
 
