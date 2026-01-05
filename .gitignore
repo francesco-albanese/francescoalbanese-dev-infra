@@ -23,8 +23,5 @@ override.tf.json
 .terraformrc
 terraform.rc
 
-# State configuration (contains sensitive info)
-state.conf
-
 # Lock files (optional - some teams commit this)
 .terraform.lock.hcl
