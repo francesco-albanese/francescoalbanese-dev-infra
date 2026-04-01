@@ -12,3 +12,18 @@ output "acm_certificate_arn" {
   description = "ACM certificate ARN (us-east-1, for CloudFront)"
   value       = aws_acm_certificate.main.arn
 }
+
+output "site_bucket_id" {
+  description = "S3 bucket name for static site"
+  value       = aws_s3_bucket.site.id
+}
+
+output "site_bucket_arn" {
+  description = "S3 bucket ARN for static site"
+  value       = aws_s3_bucket.site.arn
+}
+
+output "site_bucket_regional_domain_name" {
+  description = "S3 bucket regional domain name (for CloudFront OAC)"
+  value       = aws_s3_bucket.site.bucket_regional_domain_name
+}
