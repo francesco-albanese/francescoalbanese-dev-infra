@@ -120,6 +120,12 @@ destroy: $(addsuffix -destroy, $(STACKS))
 	@echo "++++ Destroying $* stack ++++"
 	@$(terraform) -chdir=terraform/$* destroy $($*_FLAGS) $(TF_FLAGS)
 
+build-functions: ## build CloudFront functions (TypeScript → JS)
+	@cd terraform/environmental/functions && pnpm build
+
+typecheck-functions: ## typecheck CloudFront functions
+	@cd terraform/environmental/functions && pnpm typecheck
+
 .PHONY: fmt
 fmt: ## format all terraform
 	@$(terraform) fmt -recursive terraform/

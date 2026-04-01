@@ -11,7 +11,7 @@ resource "aws_cloudfront_function" "redirect_bare_to_www" {
   name    = "redirect-bare-to-www"
   runtime = "cloudfront-js-2.0"
   publish = true
-  code    = file("${path.module}/functions/redirect-bare-to-www.js")
+  code    = file("${path.module}/functions/dist/redirect-bare-to-www.js")
 }
 
 # Response headers policy with security headers

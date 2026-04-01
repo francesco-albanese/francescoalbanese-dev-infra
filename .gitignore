@@ -25,3 +25,10 @@ terraform.rc
 
 # Lock files (optional - some teams commit this)
 .terraform.lock.hcl
+scripts/ralph
+
+# Node
+node_modules/
+
+# CloudFront Functions build output
+terraform/environmental/functions/dist/
