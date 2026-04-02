@@ -121,10 +121,10 @@ destroy: $(addsuffix -destroy, $(STACKS))
 	@$(terraform) -chdir=terraform/$* destroy $($*_FLAGS) $(TF_FLAGS)
 
 build-functions: ## build CloudFront functions (TypeScript → JS)
-	@cd terraform/environmental/functions && pnpm build
+	@pnpm build
 
 typecheck-functions: ## typecheck CloudFront functions
-	@cd terraform/environmental/functions && pnpm typecheck
+	@pnpm typecheck
 
 .PHONY: fmt
 fmt: ## format all terraform

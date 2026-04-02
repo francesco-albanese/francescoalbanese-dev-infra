@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "node esbuild.config.mjs",
-    "typecheck": "tsc --noEmit"
+    "build": "cd terraform/environmental/functions && node esbuild.config.mjs",
+    "typecheck": "cd terraform/environmental/functions && tsc --noEmit"
   },
   "devDependencies": {
     "@types/aws-cloudfront-function": "^1.0.8",

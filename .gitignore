@@ -32,4 +32,3 @@ node_modules/
 
 # CloudFront Functions build output
 terraform/environmental/functions/dist/
-.pnpm-store/
