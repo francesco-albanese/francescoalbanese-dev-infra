@@ -11,7 +11,6 @@ on:
 permissions:
   id-token: write
   contents: read
-  pull-requests: write
 
 concurrency:
   group: terraform-deploy
@@ -21,7 +20,7 @@ jobs:
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
-    environment: shared-services
+    environment: sandbox
     outputs:
       exitcode: ${{ steps.plan.outputs.exitcode }}
     steps:
@@ -34,7 +33,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
       - name: Terraform Init
-        run: make environmental-init AWS_PROFILE=
+        run: make environmental-init ACCOUNT=sandbox AWS_PROFILE=
 
       - name: Terraform Validate
         run: make environmental-validate AWS_PROFILE=
@@ -43,59 +42,9 @@ jobs:
         id: plan
         run: |
           set +e
-          AWS_PROFILE='' terraform -chdir=terraform/environmental plan -detailed-exitcode -no-color -out=tfplan 2>&1 | tee plan_output.txt
+          make environmental-plan ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-detailed-exitcode -no-color" 2>&1 | tee plan_output.txt
           echo "exitcode=$?" >> "$GITHUB_OUTPUT"
         continue-on-error: true
-
-      - name: Post plan comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const plan = fs.readFileSync('plan_output.txt', 'utf8');
-            const exitcode = '${{ steps.plan.outputs.exitcode }}';
-
-            let summary;
-            if (exitcode === '0') summary = '**No changes.** Infrastructure is up-to-date.';
-            else if (exitcode === '2') summary = '**Changes detected.** Review the plan below.';
-            else summary = '**Plan failed.** See details below.';
-
-            const body = `### Terraform Plan
-            ${summary}
-
-            <details><summary>Show plan output</summary>
-
-            \`\`\`
-            ${plan.substring(0, 65000)}
-            \`\`\`
-
-            </details>`;
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const botComment = comments.find(c =>
-              c.user.type === 'Bot' && c.body.includes('### Terraform Plan')
-            );
-
-            if (botComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
       - name: Fail on plan error
         if: steps.plan.outputs.exitcode == '1'
@@ -106,7 +55,7 @@ jobs:
     needs: plan
     if: github.ref == 'refs/heads/main' && needs.plan.outputs.exitcode == '2'
     runs-on: ubuntu-latest
-    environment: shared-services
+    environment: sandbox
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -117,7 +66,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
       - name: Terraform Init
-        run: make environmental-init AWS_PROFILE=
+        run: make environmental-init ACCOUNT=sandbox AWS_PROFILE=
 
       - name: Terraform Apply
-        run: make environmental-apply AWS_PROFILE= TF_FLAGS="-auto-approve"
+        run: make environmental-apply ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-auto-approve"
