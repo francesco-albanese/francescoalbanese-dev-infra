@@ -1,6 +1,6 @@
 # CloudFront Origin Access Control for S3
 resource "aws_cloudfront_origin_access_control" "site" {
-  name                              = "francescoalbanese-dev-site-oac"
+  name                              = "${local.project_prefix}-site-oac"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
@@ -16,7 +16,7 @@ resource "aws_cloudfront_function" "redirect_bare_to_www" {
 
 # Response headers policy with security headers
 resource "aws_cloudfront_response_headers_policy" "security_headers" {
-  name = "francescoalbanese-dev-security-headers"
+  name = "${local.project_prefix}-security-headers"
 
   security_headers_config {
     strict_transport_security {
@@ -36,7 +36,7 @@ resource "aws_cloudfront_response_headers_policy" "security_headers" {
     }
 
     content_security_policy {
-      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'"
+      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'"
       override                = true
     }
 
@@ -49,7 +49,7 @@ resource "aws_cloudfront_response_headers_policy" "security_headers" {
 
 # Cache policy for hashed assets (long TTL)
 resource "aws_cloudfront_cache_policy" "hashed_assets" {
-  name        = "francescoalbanese-dev-hashed-assets"
+  name        = "${local.project_prefix}-hashed-assets"
   default_ttl = 31536000
   max_ttl     = 31536000
   min_ttl     = 31536000
@@ -69,7 +69,7 @@ resource "aws_cloudfront_cache_policy" "hashed_assets" {
 
 # Cache policy for index.html (short TTL)
 resource "aws_cloudfront_cache_policy" "short_ttl" {
-  name        = "francescoalbanese-dev-short-ttl"
+  name        = "${local.project_prefix}-short-ttl"
   default_ttl = 300
   max_ttl     = 300
   min_ttl     = 0
@@ -139,14 +139,14 @@ resource "aws_cloudfront_distribution" "site" {
     error_code            = 403
     response_code         = 200
     response_page_path    = "/index.html"
-    error_caching_min_ttl = 300
+    error_caching_min_ttl = 60
   }
 
   custom_error_response {
     error_code            = 404
     response_code         = 200
     response_page_path    = "/index.html"
-    error_caching_min_ttl = 300
+    error_caching_min_ttl = 60
   }
 
   viewer_certificate {
@@ -159,6 +159,10 @@ resource "aws_cloudfront_distribution" "site" {
     geo_restriction {
       restriction_type = "none"
     }
+  }
+
+  tags = {
+    Name = "${local.project_prefix}-site"
   }
 }
 

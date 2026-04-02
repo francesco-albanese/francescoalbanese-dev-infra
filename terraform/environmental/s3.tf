@@ -1,6 +1,10 @@
 # S3 bucket for static site hosting (private, accessed via CloudFront OAC)
 resource "aws_s3_bucket" "site" {
-  bucket = "francescoalbanese-dev-site-${var.account_id}"
+  bucket = "${local.project_prefix}-site-${var.account_id}"
+
+  tags = {
+    Name = "${local.project_prefix}-site"
+  }
 }
 
 resource "aws_s3_bucket_versioning" "site" {
@@ -28,4 +32,17 @@ resource "aws_s3_bucket_public_access_block" "site" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "site" {
+  bucket = aws_s3_bucket.site.id
+
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
 }

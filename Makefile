@@ -4,7 +4,7 @@ SHELL := /bin/bash
 
 PROJECT_NAME ?= francescoalbanese-dev-infra
 AWS_PROFILE ?= shared-services-admin
-terraform = AWS_PROFILE=$(AWS_PROFILE) terraform
+terraform = $(if $(AWS_PROFILE),AWS_PROFILE=$(AWS_PROFILE) ,)terraform
 
 include makefiles/terraform.mk
 

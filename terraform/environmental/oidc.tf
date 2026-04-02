@@ -8,7 +8,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 # IAM role for GitHub Actions deployment (website repo)
 resource "aws_iam_role" "github_actions_deploy" {
-  name = "francescoalbanese-dev-github-actions-deploy"
+  name = "${local.project_prefix}-github-actions-deploy"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -35,7 +35,7 @@ resource "aws_iam_role" "github_actions_deploy" {
   })
 
   tags = {
-    Name = "francescoalbanese-dev-github-actions-deploy"
+    Name = "${local.project_prefix}-github-actions-deploy"
   }
 }
 
@@ -54,7 +54,8 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
           "s3:PutObject",
           "s3:DeleteObject",
           "s3:ListBucket",
-          "s3:GetObject"
+          "s3:GetObject",
+          "s3:GetBucketLocation"
         ]
         Resource = [
           aws_s3_bucket.site.arn,
@@ -73,7 +74,7 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
 
 # IAM role for GitHub Actions deployment (infra repo)
 resource "aws_iam_role" "github_actions_infra_deploy" {
-  name = "francescoalbanese-dev-infra-github-actions-deploy"
+  name = "${local.project_prefix}-infra-github-actions-deploy"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -100,7 +101,7 @@ resource "aws_iam_role" "github_actions_infra_deploy" {
   })
 
   tags = {
-    Name = "francescoalbanese-dev-infra-github-actions-deploy"
+    Name = "${local.project_prefix}-infra-github-actions-deploy"
   }
 }
 
