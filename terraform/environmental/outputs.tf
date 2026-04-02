@@ -44,6 +44,11 @@ output "cloudfront_domain_name" {
 }
 
 output "github_actions_deploy_role_arn" {
-  description = "IAM role ARN for GitHub Actions OIDC deployment"
+  description = "IAM role ARN for GitHub Actions OIDC deployment (website repo)"
   value       = aws_iam_role.github_actions_deploy.arn
+}
+
+output "github_actions_infra_deploy_role_arn" {
+  description = "IAM role ARN for GitHub Actions OIDC deployment (infra repo)"
+  value       = aws_iam_role.github_actions_infra_deploy.arn
 }
