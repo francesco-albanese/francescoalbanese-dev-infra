@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-terraform = AWS_PROFILE=$(AWS_PROFILE) terraform
+terraform = $(if $(AWS_PROFILE),AWS_PROFILE=$(AWS_PROFILE) ,)terraform
 STACKS = $(dir $(wildcard terraform/*/.))
 STACKS := $(sort $(notdir $(STACKS:/=)))
 
