@@ -114,17 +114,10 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "Route53"
-        Effect = "Allow"
-        Action = [
-          "route53:GetHostedZone",
-          "route53:ListHostedZones",
-          "route53:ChangeResourceRecordSets",
-          "route53:ListResourceRecordSets",
-          "route53:GetChange",
-          "route53:ListTagsForResource"
-        ]
-        Resource = "*"
+        Sid      = "AssumeSharedServicesRole"
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
+        Resource = "arn:aws:iam::${var.shared_services_account_id}:role/${var.shared_services_role_name}"
       },
       {
         Sid    = "S3"
@@ -234,30 +227,6 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"
         ]
       },
-      {
-        Sid    = "TerraformState"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          "arn:aws:s3:::francescoalbanese-terraform-state-*",
-          "arn:aws:s3:::francescoalbanese-terraform-state-*/*"
-        ]
-      },
-      {
-        Sid    = "DynamoDBStateLock"
-        Effect = "Allow"
-        Action = [
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:DeleteItem"
-        ]
-        Resource = "arn:aws:dynamodb:*:${var.account_id}:table/francescoalbanese-*"
-      }
     ]
   })
 }

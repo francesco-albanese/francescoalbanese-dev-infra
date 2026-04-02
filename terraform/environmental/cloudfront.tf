@@ -189,11 +189,12 @@ resource "aws_s3_bucket_policy" "site" {
   })
 }
 
-# Route53 records pointing to CloudFront
+# Route53 records pointing to CloudFront (shared-services)
 resource "aws_route53_record" "site_a" {
-  zone_id = aws_route53_zone.main.zone_id
-  name    = "www.${var.domain_name}"
-  type    = "A"
+  provider = aws.shared_services
+  zone_id  = aws_route53_zone.main.zone_id
+  name     = "www.${var.domain_name}"
+  type     = "A"
 
   alias {
     name                   = aws_cloudfront_distribution.site.domain_name
@@ -203,9 +204,10 @@ resource "aws_route53_record" "site_a" {
 }
 
 resource "aws_route53_record" "site_aaaa" {
-  zone_id = aws_route53_zone.main.zone_id
-  name    = "www.${var.domain_name}"
-  type    = "AAAA"
+  provider = aws.shared_services
+  zone_id  = aws_route53_zone.main.zone_id
+  name     = "www.${var.domain_name}"
+  type     = "AAAA"
 
   alias {
     name                   = aws_cloudfront_distribution.site.domain_name
@@ -215,9 +217,10 @@ resource "aws_route53_record" "site_aaaa" {
 }
 
 resource "aws_route53_record" "site_bare_a" {
-  zone_id = aws_route53_zone.main.zone_id
-  name    = var.domain_name
-  type    = "A"
+  provider = aws.shared_services
+  zone_id  = aws_route53_zone.main.zone_id
+  name     = var.domain_name
+  type     = "A"
 
   alias {
     name                   = aws_cloudfront_distribution.site.domain_name
@@ -227,9 +230,10 @@ resource "aws_route53_record" "site_bare_a" {
 }
 
 resource "aws_route53_record" "site_bare_aaaa" {
-  zone_id = aws_route53_zone.main.zone_id
-  name    = var.domain_name
-  type    = "AAAA"
+  provider = aws.shared_services
+  zone_id  = aws_route53_zone.main.zone_id
+  name     = var.domain_name
+  type     = "AAAA"
 
   alias {
     name                   = aws_cloudfront_distribution.site.domain_name

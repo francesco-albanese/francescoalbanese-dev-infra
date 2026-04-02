@@ -10,8 +10,9 @@ resource "aws_acm_certificate" "main" {
   }
 }
 
-# DNS validation records in Route53
+# DNS validation records in Route53 (shared-services)
 resource "aws_route53_record" "acm_validation" {
+  provider = aws.shared_services
   for_each = {
     for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
       name   = dvo.resource_record_name
