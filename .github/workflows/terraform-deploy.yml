@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: terraform-deploy
+  group: terraform-deploy-sandbox
   cancel-in-progress: false
 
 jobs:
@@ -26,6 +26,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CloudFront functions
+        run: pnpm build
 
       - name: Configure AWS + Terraform
         uses: ./.github/actions/configure-aws-env
@@ -41,9 +56,9 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
-          set +e
-          make environmental-plan ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-detailed-exitcode -no-color" 2>&1 | tee plan_output.txt
-          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+          set +e -o pipefail
+          make environmental-plan ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-detailed-exitcode -no-color"
+          echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
       - name: Fail on plan error
@@ -59,6 +74,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CloudFront functions
+        run: pnpm build
 
       - name: Configure AWS + Terraform
         uses: ./.github/actions/configure-aws-env

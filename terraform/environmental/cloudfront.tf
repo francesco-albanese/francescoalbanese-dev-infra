@@ -101,14 +101,14 @@ resource "aws_cloudfront_distribution" "site" {
     origin_access_control_id = aws_cloudfront_origin_access_control.site.id
   }
 
-  # Default cache behavior (hashed assets — long TTL)
+  # Default cache behavior (short TTL — safe for index.html, robots.txt, favicon, etc.)
   default_cache_behavior {
     allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]
     target_origin_id           = "s3-site"
     viewer_protocol_policy     = "redirect-to-https"
     compress                   = true
-    cache_policy_id            = aws_cloudfront_cache_policy.hashed_assets.id
+    cache_policy_id            = aws_cloudfront_cache_policy.short_ttl.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
 
     function_association {
@@ -117,15 +117,15 @@ resource "aws_cloudfront_distribution" "site" {
     }
   }
 
-  # Ordered cache behavior for index.html (short TTL)
+  # Ordered cache behavior for Astro hashed assets (long TTL — 1 year)
   ordered_cache_behavior {
-    path_pattern               = "/index.html"
+    path_pattern               = "/_astro/*"
     allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]
     target_origin_id           = "s3-site"
     viewer_protocol_policy     = "redirect-to-https"
     compress                   = true
-    cache_policy_id            = aws_cloudfront_cache_policy.short_ttl.id
+    cache_policy_id            = aws_cloudfront_cache_policy.hashed_assets.id
     response_headers_policy_id = aws_cloudfront_response_headers_policy.security_headers.id
 
     function_association {
@@ -192,7 +192,7 @@ resource "aws_s3_bucket_policy" "site" {
 # Route53 records pointing to CloudFront (shared-services)
 resource "aws_route53_record" "site_a" {
   provider = aws.shared_services
-  zone_id  = aws_route53_zone.main.zone_id
+  zone_id  = data.aws_route53_zone.main.zone_id
   name     = "www.${var.domain_name}"
   type     = "A"
 
@@ -205,7 +205,7 @@ resource "aws_route53_record" "site_a" {
 
 resource "aws_route53_record" "site_aaaa" {
   provider = aws.shared_services
-  zone_id  = aws_route53_zone.main.zone_id
+  zone_id  = data.aws_route53_zone.main.zone_id
   name     = "www.${var.domain_name}"
   type     = "AAAA"
 
@@ -218,7 +218,7 @@ resource "aws_route53_record" "site_aaaa" {
 
 resource "aws_route53_record" "site_bare_a" {
   provider = aws.shared_services
-  zone_id  = aws_route53_zone.main.zone_id
+  zone_id  = data.aws_route53_zone.main.zone_id
   name     = var.domain_name
   type     = "A"
 
@@ -231,7 +231,7 @@ resource "aws_route53_record" "site_bare_a" {
 
 resource "aws_route53_record" "site_bare_aaaa" {
   provider = aws.shared_services
-  zone_id  = aws_route53_zone.main.zone_id
+  zone_id  = data.aws_route53_zone.main.zone_id
   name     = var.domain_name
   type     = "AAAA"
 

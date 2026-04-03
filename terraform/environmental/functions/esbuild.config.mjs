@@ -8,6 +8,9 @@ const result = await build({
   format: "esm",
   target: "es2021",
   minify: false,
+  define: {
+    __DOMAIN__: JSON.stringify(process.env.DOMAIN || "francescoalbanese.dev"),
+  },
 });
 
 const output = result.outputFiles[0].text

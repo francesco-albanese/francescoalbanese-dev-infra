@@ -105,6 +105,56 @@ resource "aws_iam_role" "github_actions_infra_deploy" {
   }
 }
 
+# Permissions boundary — caps privileges for any role created by infra deploy
+resource "aws_iam_policy" "infra_deploy_boundary" {
+  name        = "${local.project_prefix}-infra-deploy-boundary"
+  description = "Permissions boundary for roles created by the infra deploy pipeline"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowS3"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation"
+        ]
+        Resource = [
+          "arn:aws:s3:::francescoalbanese-*",
+          "arn:aws:s3:::francescoalbanese-*/*"
+        ]
+      },
+      {
+        Sid      = "AllowCloudFrontInvalidation"
+        Effect   = "Allow"
+        Action   = ["cloudfront:CreateInvalidation"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/franco:terraform_stack" = "francescoalbanese-dev-infra"
+          }
+        }
+      },
+      {
+        Sid    = "AllowSTSAssumeRole"
+        Effect = "Allow"
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Resource = [
+          "arn:aws:iam::${var.account_id}:role/francescoalbanese-*"
+        ]
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${local.project_prefix}-infra-deploy-boundary"
+  }
+}
+
 # Scoped IAM policy for infra deploy role
 resource "aws_iam_role_policy" "github_actions_infra_deploy" {
   name = "infra-deploy"
@@ -149,48 +199,57 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
         Resource = "arn:aws:s3:::francescoalbanese-*"
       },
       {
-        Sid    = "CloudFront"
+        Sid    = "CloudFrontReadOnly"
         Effect = "Allow"
         Action = [
           "cloudfront:GetDistribution",
-          "cloudfront:CreateDistribution",
-          "cloudfront:UpdateDistribution",
-          "cloudfront:DeleteDistribution",
-          "cloudfront:TagResource",
-          "cloudfront:UntagResource",
           "cloudfront:ListTagsForResource",
           "cloudfront:GetOriginAccessControl",
-          "cloudfront:CreateOriginAccessControl",
-          "cloudfront:UpdateOriginAccessControl",
-          "cloudfront:DeleteOriginAccessControl",
           "cloudfront:GetFunction",
-          "cloudfront:CreateFunction",
-          "cloudfront:UpdateFunction",
-          "cloudfront:DeleteFunction",
           "cloudfront:DescribeFunction",
-          "cloudfront:PublishFunction",
           "cloudfront:GetCachePolicy",
-          "cloudfront:CreateCachePolicy",
-          "cloudfront:UpdateCachePolicy",
-          "cloudfront:DeleteCachePolicy",
           "cloudfront:GetResponseHeadersPolicy",
-          "cloudfront:CreateResponseHeadersPolicy",
-          "cloudfront:UpdateResponseHeadersPolicy",
-          "cloudfront:DeleteResponseHeadersPolicy",
-          "cloudfront:CreateInvalidation",
           "cloudfront:GetCloudFrontOriginAccessIdentity",
           "cloudfront:ListDistributions"
         ]
         Resource = "*"
       },
       {
-        Sid    = "ACM"
+        Sid    = "CloudFrontMutate"
+        Effect = "Allow"
+        Action = [
+          "cloudfront:CreateDistribution",
+          "cloudfront:UpdateDistribution",
+          "cloudfront:DeleteDistribution",
+          "cloudfront:TagResource",
+          "cloudfront:UntagResource",
+          "cloudfront:CreateOriginAccessControl",
+          "cloudfront:UpdateOriginAccessControl",
+          "cloudfront:DeleteOriginAccessControl",
+          "cloudfront:CreateFunction",
+          "cloudfront:UpdateFunction",
+          "cloudfront:DeleteFunction",
+          "cloudfront:PublishFunction",
+          "cloudfront:CreateCachePolicy",
+          "cloudfront:UpdateCachePolicy",
+          "cloudfront:DeleteCachePolicy",
+          "cloudfront:CreateResponseHeadersPolicy",
+          "cloudfront:UpdateResponseHeadersPolicy",
+          "cloudfront:DeleteResponseHeadersPolicy",
+          "cloudfront:CreateInvalidation"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/franco:terraform_stack" = "francescoalbanese-dev-infra"
+          }
+        }
+      },
+      {
+        Sid    = "ACMReadOnly"
         Effect = "Allow"
         Action = [
           "acm:DescribeCertificate",
-          "acm:RequestCertificate",
-          "acm:DeleteCertificate",
-          "acm:AddTagsToCertificate",
           "acm:ListTagsForCertificate",
           "acm:GetCertificate",
           "acm:ListCertificates"
@@ -198,11 +257,37 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
         Resource = "*"
       },
       {
-        Sid    = "IAM"
+        Sid    = "ACMRequestWithTag"
+        Effect = "Allow"
+        Action = [
+          "acm:RequestCertificate",
+          "acm:AddTagsToCertificate"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestTag/franco:terraform_stack" = "francescoalbanese-dev-infra"
+          }
+        }
+      },
+      {
+        Sid    = "ACMMutateTagged"
+        Effect = "Allow"
+        Action = [
+          "acm:DeleteCertificate"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/franco:terraform_stack" = "francescoalbanese-dev-infra"
+          }
+        }
+      },
+      {
+        Sid    = "IAMRolesAndOIDC"
         Effect = "Allow"
         Action = [
           "iam:GetRole",
-          "iam:CreateRole",
           "iam:DeleteRole",
           "iam:UpdateRole",
           "iam:TagRole",
@@ -226,6 +311,17 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "arn:aws:iam::${var.account_id}:role/francescoalbanese-*",
           "arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"
         ]
+      },
+      {
+        Sid      = "IAMCreateRoleWithBoundary"
+        Effect   = "Allow"
+        Action   = "iam:CreateRole"
+        Resource = "arn:aws:iam::${var.account_id}:role/francescoalbanese-*"
+        Condition = {
+          StringEquals = {
+            "iam:PermissionsBoundary" = aws_iam_policy.infra_deploy_boundary.arn
+          }
+        }
       },
     ]
   })
