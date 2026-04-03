@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import { writeFileSync, mkdirSync } from "fs";
 
 const result = await build({
-  entryPoints: ["src/redirect-bare-to-www.ts"],
+  entryPoints: ["src/redirect-www-to-bare.ts"],
   bundle: true,
   write: false,
   format: "esm",
@@ -18,6 +18,6 @@ const output = result.outputFiles[0].text
   .trim();
 
 mkdirSync("dist", { recursive: true });
-writeFileSync("dist/redirect-bare-to-www.js", output + "\n");
+writeFileSync("dist/redirect-www-to-bare.js", output + "\n");
 
-console.log("Built dist/redirect-bare-to-www.js");
+console.log("Built dist/redirect-www-to-bare.js");

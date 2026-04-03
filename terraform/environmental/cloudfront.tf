@@ -1,3 +1,19 @@
+# State moves for renamed resources (safe to remove after first apply)
+moved {
+  from = aws_cloudfront_function.redirect_bare_to_www
+  to   = aws_cloudfront_function.redirect_www_to_bare
+}
+
+moved {
+  from = aws_route53_record.site_bare_a
+  to   = aws_route53_record.site_www_a
+}
+
+moved {
+  from = aws_route53_record.site_bare_aaaa
+  to   = aws_route53_record.site_www_aaaa
+}
+
 # CloudFront Origin Access Control for S3
 resource "aws_cloudfront_origin_access_control" "site" {
   name                              = "${local.project_prefix}-site-oac"
@@ -6,12 +22,12 @@ resource "aws_cloudfront_origin_access_control" "site" {
   signing_protocol                  = "sigv4"
 }
 
-# CloudFront Function: redirect bare domain to www
-resource "aws_cloudfront_function" "redirect_bare_to_www" {
-  name    = "redirect-bare-to-www"
+# CloudFront Function: redirect www to bare domain
+resource "aws_cloudfront_function" "redirect_www_to_bare" {
+  name    = "redirect-www-to-bare"
   runtime = "cloudfront-js-2.0"
   publish = true
-  code    = file("${path.module}/functions/dist/redirect-bare-to-www.js")
+  code    = file("${path.module}/functions/dist/redirect-www-to-bare.js")
 }
 
 # Response headers policy with security headers
@@ -113,7 +129,7 @@ resource "aws_cloudfront_distribution" "site" {
 
     function_association {
       event_type   = "viewer-request"
-      function_arn = aws_cloudfront_function.redirect_bare_to_www.arn
+      function_arn = aws_cloudfront_function.redirect_www_to_bare.arn
     }
   }
 
@@ -130,7 +146,7 @@ resource "aws_cloudfront_distribution" "site" {
 
     function_association {
       event_type   = "viewer-request"
-      function_arn = aws_cloudfront_function.redirect_bare_to_www.arn
+      function_arn = aws_cloudfront_function.redirect_www_to_bare.arn
     }
   }
 
@@ -193,7 +209,7 @@ resource "aws_s3_bucket_policy" "site" {
 resource "aws_route53_record" "site_a" {
   provider = aws.shared_services
   zone_id  = data.aws_route53_zone.main.zone_id
-  name     = "www.${var.domain_name}"
+  name     = var.domain_name
   type     = "A"
 
   alias {
@@ -206,7 +222,7 @@ resource "aws_route53_record" "site_a" {
 resource "aws_route53_record" "site_aaaa" {
   provider = aws.shared_services
   zone_id  = data.aws_route53_zone.main.zone_id
-  name     = "www.${var.domain_name}"
+  name     = var.domain_name
   type     = "AAAA"
 
   alias {
@@ -216,10 +232,10 @@ resource "aws_route53_record" "site_aaaa" {
   }
 }
 
-resource "aws_route53_record" "site_bare_a" {
+resource "aws_route53_record" "site_www_a" {
   provider = aws.shared_services
   zone_id  = data.aws_route53_zone.main.zone_id
-  name     = var.domain_name
+  name     = "www.${var.domain_name}"
   type     = "A"
 
   alias {
@@ -229,10 +245,10 @@ resource "aws_route53_record" "site_bare_a" {
   }
 }
 
-resource "aws_route53_record" "site_bare_aaaa" {
+resource "aws_route53_record" "site_www_aaaa" {
   provider = aws.shared_services
   zone_id  = data.aws_route53_zone.main.zone_id
-  name     = var.domain_name
+  name     = "www.${var.domain_name}"
   type     = "AAAA"
 
   alias {

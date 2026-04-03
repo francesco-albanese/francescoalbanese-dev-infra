@@ -3,12 +3,12 @@ export function handler(
 ): AWSCloudFrontFunction.Request | AWSCloudFrontFunction.Response {
 	const host = event.request.headers.host.value;
 
-	if (host === __DOMAIN__) {
+	if (host === "www." + __DOMAIN__) {
 		return {
 			statusCode: 301,
 			headers: {
 				location: {
-					value: "https://www." + __DOMAIN__ + event.request.uri,
+					value: "https://" + __DOMAIN__ + event.request.uri,
 				},
 			},
 		};
