@@ -5,6 +5,7 @@ Terraform infrastructure for `francescoalbanese.dev` domain.
 ## Purpose
 
 Centralized Route53 hosted zone in AWS shared-services account, enabling:
+
 - DNS management for personal domain
 - Cross-project reuse (mTLS API Gateway, personal website, etc.)
 - Easy teardown when no longer needed
@@ -18,7 +19,7 @@ Centralized Route53 hosted zone in AWS shared-services account, enabling:
 
 ## Usage
 
-```bash
+````bash
 # Initialize
 make environmental-init
 
@@ -28,10 +29,6 @@ make environmental-plan
 # Apply
 make environmental-apply
 
-# Get nameservers
-terraform -chdir=terraform/environmental output nameservers
-```
-
 ## DNS
 
 Domain purchased from Porkbun, NS records pointed to AWS Route53.
@@ -40,4 +37,4 @@ Domain purchased from Porkbun, NS records pointed to AWS Route53.
 
 ```bash
 make environmental-destroy
-```
+````
