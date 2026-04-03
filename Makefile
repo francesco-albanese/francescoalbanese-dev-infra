@@ -3,8 +3,8 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 PROJECT_NAME ?= francescoalbanese-dev-infra
-AWS_PROFILE ?= shared-services-admin
-terraform = AWS_PROFILE=$(AWS_PROFILE) terraform
+ACCOUNT ?= sandbox
+AWS_PROFILE ?= sandbox-admin
 
 include makefiles/terraform.mk
 

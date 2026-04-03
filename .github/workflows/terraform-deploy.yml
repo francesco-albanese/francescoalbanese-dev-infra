@@ -1,0 +1,102 @@
+name: Terraform Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: [terraform/**]
+  pull_request:
+    paths: [terraform/**]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-deploy-sandbox
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    environment: sandbox
+    outputs:
+      exitcode: ${{ steps.plan.outputs.exitcode }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CloudFront functions
+        run: pnpm build
+
+      - name: Configure AWS + Terraform
+        uses: ./.github/actions/configure-aws-env
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Terraform Init
+        run: make environmental-init ACCOUNT=sandbox AWS_PROFILE=
+
+      - name: Terraform Validate
+        run: make environmental-validate AWS_PROFILE=
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          set +e -o pipefail
+          make environmental-plan ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-detailed-exitcode -no-color"
+          echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Fail on plan error
+        if: steps.plan.outputs.exitcode == '1'
+        run: exit 1
+
+  apply:
+    name: Terraform Apply
+    needs: plan
+    if: github.ref == 'refs/heads/main' && needs.plan.outputs.exitcode == '2'
+    runs-on: ubuntu-latest
+    environment: sandbox
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CloudFront functions
+        run: pnpm build
+
+      - name: Configure AWS + Terraform
+        uses: ./.github/actions/configure-aws-env
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Terraform Init
+        run: make environmental-init ACCOUNT=sandbox AWS_PROFILE=
+
+      - name: Terraform Apply
+        run: make environmental-apply ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-auto-approve"

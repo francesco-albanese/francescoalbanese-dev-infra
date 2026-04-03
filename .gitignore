@@ -1,3 +1,6 @@
+# macOS
+.DS_Store
+
 # Local .terraform directories
 **/.terraform/*
 
@@ -9,10 +12,6 @@
 crash.log
 crash.*.log
 
-# Exclude all .tfvars files (may contain sensitive data)
-*.tfvars
-*.tfvars.json
-
 # Override files
 override.tf
 override.tf.json
@@ -22,9 +21,10 @@ override.tf.json
 # CLI configuration files
 .terraformrc
 terraform.rc
+scripts/ralph
 
-# State configuration (contains sensitive info)
-state.conf
+# Node
+node_modules/
 
-# Lock files (optional - some teams commit this)
-.terraform.lock.hcl
+# CloudFront Functions build output
+terraform/environmental/functions/dist/

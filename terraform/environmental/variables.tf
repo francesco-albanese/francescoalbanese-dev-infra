@@ -5,19 +5,28 @@ variable "region" {
 }
 
 variable "account_id" {
-  description = "AWS account ID (shared-services)"
+  description = "AWS account ID for target account"
   type        = string
-  default     = "088994864650"
 }
 
 variable "account_name" {
-  description = "Account name"
+  description = "The name of the account (sandbox/staging/uat/production)"
   type        = string
-  default     = "shared-services"
 }
 
 variable "domain_name" {
   description = "Domain name for Route53 hosted zone"
   type        = string
-  default     = "francescoalbanese.dev"
+}
+
+variable "shared_services_account_id" {
+  description = "AWS account ID for shared-services (Route53, state backend)"
+  type        = string
+  default     = "088994864650"
+}
+
+variable "shared_services_role_name" {
+  description = "IAM role name for shared-services cross-account access"
+  type        = string
+  default     = "terraform"
 }

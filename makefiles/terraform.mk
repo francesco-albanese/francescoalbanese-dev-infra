@@ -1,6 +1,10 @@
 SHELL := /bin/bash
 
+ifneq ($(AWS_PROFILE),)
 terraform = AWS_PROFILE=$(AWS_PROFILE) terraform
+else
+terraform = terraform
+endif
 STACKS = $(dir $(wildcard terraform/*/.))
 STACKS := $(sort $(notdir $(STACKS:/=)))
 
@@ -10,8 +14,9 @@ all:
 $(STACKS): $$@-init $$@-validate $$@-plan $$@-apply $$@-destroy
 
 STATE_CONF := state.conf
-environmental_KEY := $(PROJECT_NAME)
-environmental_FLAGS :=
+environmental_KEY := $(PROJECT_NAME)/environmental/$(ACCOUNT)
+environmental_ACCOUNT := $(ACCOUNT)
+environmental_FLAGS := -var-file=env/$(ACCOUNT).tfvars
 
 tf-setup: ## install tfenv and tflint (macOS: use brew install terraform instead)
 tf-setup:
@@ -95,7 +100,7 @@ destroy: $(addsuffix -destroy, $(STACKS))
 %-init:
 	@echo "++++ Initializing $* stack ++++"
 	@if [ -f $(STATE_CONF) ]; then \
-		$(terraform) -chdir=terraform/$* init -backend-config=../../$(STATE_CONF) $($*_FLAGS) $(TF_FLAGS); \
+		$(terraform) -chdir=terraform/$* init -backend-config=../../$(STATE_CONF) -backend-config="key=$($*_KEY)/terraform.tfstate" $($*_FLAGS) $(TF_FLAGS); \
 	else \
 		$(terraform) -chdir=terraform/$* init $($*_FLAGS) $(TF_FLAGS); \
 	fi
@@ -119,6 +124,12 @@ destroy: $(addsuffix -destroy, $(STACKS))
 %-destroy:
 	@echo "++++ Destroying $* stack ++++"
 	@$(terraform) -chdir=terraform/$* destroy $($*_FLAGS) $(TF_FLAGS)
+
+build-functions: ## build CloudFront functions (TypeScript → JS)
+	@pnpm build
+
+typecheck-functions: ## typecheck CloudFront functions
+	@pnpm typecheck
 
 .PHONY: fmt
 fmt: ## format all terraform
