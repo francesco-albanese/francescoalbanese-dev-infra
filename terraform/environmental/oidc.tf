@@ -91,8 +91,7 @@ resource "aws_iam_role" "github_actions_infra_deploy" {
           }
           StringLike = {
             "token.actions.githubusercontent.com:sub" = [
-              "repo:francesco-albanese/francescoalbanese-dev-infra:ref:refs/heads/main",
-              "repo:francesco-albanese/francescoalbanese-dev-infra:pull_request"
+              "repo:francesco-albanese/francescoalbanese-dev-infra:environment:sandbox"
             ]
           }
         }
