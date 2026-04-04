@@ -24,7 +24,7 @@ resource "aws_cloudfront_origin_access_control" "site" {
 
 # CloudFront Function: redirect www to bare domain
 resource "aws_cloudfront_function" "redirect_www_to_bare" {
-  name    = "redirect-www-to-bare"
+  name    = "redirect-bare-to-www"
   runtime = "cloudfront-js-2.0"
   publish = true
   code    = file("${path.module}/functions/dist/redirect-www-to-bare.js")
