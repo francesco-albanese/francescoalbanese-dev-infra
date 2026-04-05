@@ -323,6 +323,21 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           }
         }
       },
+      {
+        Sid    = "IAMManagedPolicies"
+        Effect = "Allow"
+        Action = [
+          "iam:GetPolicy",
+          "iam:GetPolicyVersion",
+          "iam:CreatePolicy",
+          "iam:CreatePolicyVersion",
+          "iam:DeletePolicy",
+          "iam:DeletePolicyVersion",
+          "iam:ListPolicyVersions",
+          "iam:TagPolicy"
+        ]
+        Resource = "arn:aws:iam::${var.account_id}:policy/francescoalbanese-*"
+      },
     ]
   })
 }
