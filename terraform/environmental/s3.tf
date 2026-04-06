@@ -1,6 +1,6 @@
 # S3 bucket for static site hosting (private, accessed via CloudFront OAC)
 resource "aws_s3_bucket" "site" {
-  bucket = "${local.project_prefix}-site-${var.account_id}"
+  bucket = local.site_bucket_name
 
   tags = {
     Name = "${local.project_prefix}-site"
