@@ -1,5 +1,7 @@
 locals {
-  project_prefix = "francescoalbanese-dev"
+  project_prefix   = "francescoalbanese-dev"
+  site_bucket_name = "${local.project_prefix}-site-${var.account_id}"
+  site_bucket_arn  = "arn:aws:s3:::${local.site_bucket_name}"
 }
 
 # Route53 hosted zone for francescoalbanese.dev (in shared-services, centralised DNS)

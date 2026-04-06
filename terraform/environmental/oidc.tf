@@ -124,8 +124,8 @@ resource "aws_iam_policy" "infra_deploy_boundary" {
           "s3:GetBucketLocation"
         ]
         Resource = [
-          "arn:aws:s3:::francescoalbanese-*",
-          "arn:aws:s3:::francescoalbanese-*/*"
+          local.site_bucket_arn,
+          "${local.site_bucket_arn}/*"
         ]
       },
       {
@@ -138,14 +138,6 @@ resource "aws_iam_policy" "infra_deploy_boundary" {
             "aws:ResourceTag/franco:terraform_stack" = "francescoalbanese-dev-infra"
           }
         }
-      },
-      {
-        Sid    = "AllowSTSAssumeRole"
-        Effect = "Allow"
-        Action = "sts:AssumeRoleWithWebIdentity"
-        Resource = [
-          "arn:aws:iam::${var.account_id}:role/francescoalbanese-*"
-        ]
       }
     ]
   })
@@ -196,7 +188,7 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "s3:ListBucket",
           "s3:PutBucketVersioning"
         ]
-        Resource = "arn:aws:s3:::francescoalbanese-*"
+        Resource = local.site_bucket_arn
       },
       {
         Sid    = "CloudFrontReadOnly"
@@ -308,15 +300,19 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "iam:ListOpenIDConnectProviders"
         ]
         Resource = [
-          "arn:aws:iam::${var.account_id}:role/francescoalbanese-*",
+          "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-github-actions-deploy",
+          "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-infra-github-actions-deploy",
           "arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"
         ]
       },
       {
-        Sid      = "IAMCreateRoleWithBoundary"
-        Effect   = "Allow"
-        Action   = "iam:CreateRole"
-        Resource = "arn:aws:iam::${var.account_id}:role/francescoalbanese-*"
+        Sid    = "IAMCreateRoleWithBoundary"
+        Effect = "Allow"
+        Action = "iam:CreateRole"
+        Resource = [
+          "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-github-actions-deploy",
+          "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-infra-github-actions-deploy"
+        ]
         Condition = {
           StringEquals = {
             "iam:PermissionsBoundary" = aws_iam_policy.infra_deploy_boundary.arn
@@ -336,7 +332,7 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "iam:ListPolicyVersions",
           "iam:TagPolicy"
         ]
-        Resource = "arn:aws:iam::${var.account_id}:policy/francescoalbanese-*"
+        Resource = "arn:aws:iam::${var.account_id}:policy/${local.project_prefix}-infra-deploy-boundary"
       },
     ]
   })
