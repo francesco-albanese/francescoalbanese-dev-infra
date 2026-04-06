@@ -51,10 +51,9 @@ resource "aws_cloudfront_response_headers_policy" "security_headers" {
       override     = true
     }
 
-    content_security_policy {
-      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'"
-      override                = true
-    }
+    # CSP moved to <meta> tag in HTML — Astro inlines scripts/styles that need
+    # per-build SHA-256 hashes, which can't be hardcoded here. See app repo
+    # docs/adr/001-csp-hash-strategy.md for rationale.
 
     referrer_policy {
       referrer_policy = "strict-origin-when-cross-origin"
