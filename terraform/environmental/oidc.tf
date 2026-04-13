@@ -218,10 +218,6 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "cloudfront:CreateOriginAccessControl",
           "cloudfront:UpdateOriginAccessControl",
           "cloudfront:DeleteOriginAccessControl",
-          "cloudfront:CreateFunction",
-          "cloudfront:UpdateFunction",
-          "cloudfront:DeleteFunction",
-          "cloudfront:PublishFunction",
           "cloudfront:CreateCachePolicy",
           "cloudfront:UpdateCachePolicy",
           "cloudfront:DeleteCachePolicy",
@@ -236,6 +232,17 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
             "aws:ResourceTag/franco:terraform_stack" = "francescoalbanese-dev-infra"
           }
         }
+      },
+      {
+        Sid    = "CloudFrontFunctions"
+        Effect = "Allow"
+        Action = [
+          "cloudfront:CreateFunction",
+          "cloudfront:UpdateFunction",
+          "cloudfront:DeleteFunction",
+          "cloudfront:PublishFunction"
+        ]
+        Resource = "arn:aws:cloudfront::${var.account_id}:function/*"
       },
       {
         Sid    = "ACMReadOnly"
