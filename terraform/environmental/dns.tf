@@ -23,3 +23,15 @@ resource "aws_route53_record" "email_spf" {
     "v=spf1 include:_spf.porkbun.com ~all",
   ]
 }
+
+resource "aws_route53_record" "email_dmarc" {
+  provider = aws.shared_services
+  zone_id  = data.aws_route53_zone.main.zone_id
+  name     = "_dmarc.${var.domain_name}"
+  type     = "TXT"
+  ttl      = 300
+
+  records = [
+    "v=DMARC1; p=none; rua=mailto:hello@francescoalbanese.dev",
+  ]
+}
