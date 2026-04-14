@@ -1,0 +1,31 @@
+ARG LAMBDA_DIR
+ARG PACKAGE_NAME
+FROM ghcr.io/astral-sh/uv:0.5 AS uv
+
+FROM public.ecr.aws/lambda/python:3.13-arm64 AS builder
+ARG LAMBDA_DIR
+COPY --from=uv /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_NO_INSTALLER_METADATA=1
+ENV UV_LINK_MODE=copy
+
+WORKDIR /app
+COPY ${LAMBDA_DIR}/pyproject.toml ${LAMBDA_DIR}/uv.lock ./
+RUN uv sync --frozen --no-dev --no-editable
+
+COPY ${LAMBDA_DIR}/src/ ./src/
+
+# Conditional GeoIP stage — scratch is empty, so COPY from it is a no-op
+FROM scratch AS geoip-false
+FROM scratch AS geoip-true
+COPY data/GeoLite2-City.mmdb /opt/GeoLite2-City.mmdb
+
+FROM public.ecr.aws/lambda/python:3.13-arm64
+ARG PACKAGE_NAME
+ARG INCLUDE_GEOIP=false
+COPY --from=builder /app/.venv/lib/python3.13/site-packages ${LAMBDA_TASK_ROOT}
+COPY --from=builder /app/src/${PACKAGE_NAME} ${LAMBDA_TASK_ROOT}
+COPY --from=geoip-${INCLUDE_GEOIP} / /
+
+CMD ["handler.handler"]
