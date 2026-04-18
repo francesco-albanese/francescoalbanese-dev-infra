@@ -1,19 +1,20 @@
 import gzip
-import hashlib
 import json
 import logging
 import os
 import re
 import socket
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
-from typing import Any
+from typing import TypedDict, cast
 from urllib.parse import unquote
 
 import boto3
 import geoip2.database
 import geoip2.errors
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -40,9 +41,50 @@ STATIC_ASSET_PATTERNS = re.compile(
     r")"
 )
 
-CF_LOG_FIELD_COUNT = 33
+# Matches YYYY-MM-DD or YYYY/MM/DD anywhere in the key — works for v1
+# filenames (E1234.2026-04-14-15.abc.gz) and v2 S3 paths
+# (AWSLogs/acct/CloudFront/dist/2026/04/14/...).
+DATE_IN_KEY = re.compile(r"(\d{4})[-/](\d{2})[-/](\d{2})")
+
+SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
 TARGET_COUNTRIES = {"United Kingdom", "United States"}
+
+DEEP_BROWSE_MIN_PAGES = 3
+CITY_CLUSTER_MIN_IPS = 3
+
+
+class CFEntry(TypedDict):
+    date: str
+    time: str
+    sc_bytes: str
+    c_ip: str
+    method: str
+    uri_stem: str
+    status: str
+    referer: str
+    user_agent: str
+
+
+class EnrichedRecord(TypedDict):
+    timestamp: str
+    client_ip: str
+    city: str
+    country: str
+    rdns: str
+    path: str
+    referer: str
+    user_agent: str
+    status: int
+    bytes_sent: int
+    method: str
+
+
+@dataclass(frozen=True)
+class Alert:
+    type: str  # "deep_browse" | "city_cluster"
+    dedup_id: str  # ip for deep_browse, slugified city for city_cluster
+    message: str
 
 
 def get_geoip_reader() -> geoip2.database.Reader:
@@ -69,31 +111,70 @@ def is_static_asset(path: str) -> bool:
     return bool(STATIC_ASSET_PATTERNS.search(path))
 
 
-def parse_cf_log(raw: str) -> list[dict[str, str]]:
-    entries = []
+def slugify(s: str) -> str:
+    return SLUG_STRIP.sub("-", s.lower()).strip("-") or "unknown"
+
+
+def event_date_from_key(key: str) -> datetime:
+    # Prefer a date embedded in the S3 key; fall back to wall clock.
+    m = DATE_IN_KEY.search(key)
+    if m:
+        year, month, day = map(int, m.groups())
+        return datetime(year, month, day, tzinfo=UTC)
+    return datetime.now(UTC)
+
+
+def _pick(values: list[str], field_index: dict[str, int], name: str) -> str:
+    idx = field_index.get(name)
+    if idx is None or idx >= len(values):
+        return ""
+    return values[idx]
+
+
+def parse_cf_log(raw: str) -> list[CFEntry]:
+    # Parse the `#Fields:` header so we tolerate both v1 (33 cols) and v2
+    # (trimmed record_fields) layouts.
+    entries: list[CFEntry] = []
+    field_index: dict[str, int] = {}
+
     for line in raw.strip().split("\n"):
+        if line.startswith("#Fields:"):
+            spec = line[len("#Fields:") :].strip().split()
+            field_index = {name: i for i, name in enumerate(spec)}
+            continue
         if line.startswith("#"):
             continue
-        fields = line.split("\t")
-        if len(fields) < CF_LOG_FIELD_COUNT:
+        if not field_index:
             continue
+
+        values = line.split("\t")
+
+        # Reject lines that don't have all the columns the header declared —
+        # catches malformed rows without coupling to a specific field count.
+        if len(values) < len(field_index):
+            continue
+
         entries.append(
-            {
-                "date": fields[0],
-                "time": fields[1],
-                "sc_bytes": fields[3],
-                "c_ip": fields[4],
-                "method": fields[5],
-                "uri_stem": fields[7],
-                "status": fields[8],
-                "referer": fields[9],
-                "user_agent": fields[10],
-            }
+            CFEntry(
+                date=_pick(values, field_index, "date"),
+                time=_pick(values, field_index, "time"),
+                sc_bytes=_pick(values, field_index, "sc-bytes"),
+                c_ip=_pick(values, field_index, "c-ip"),
+                method=_pick(values, field_index, "cs-method"),
+                uri_stem=_pick(values, field_index, "cs-uri-stem"),
+                status=_pick(values, field_index, "sc-status"),
+                referer=_pick(values, field_index, "cs(Referer)"),
+                user_agent=_pick(values, field_index, "cs(User-Agent)"),
+            )
         )
     return entries
 
 
-def enrich_entry(entry: dict[str, str], reader: geoip2.database.Reader) -> dict[str, Any] | None:
+def enrich_entry(
+    entry: CFEntry,
+    reader: geoip2.database.Reader,
+    rdns_cache: dict[str, str],
+) -> EnrichedRecord | None:
     user_agent = unquote(entry["user_agent"].replace("+", " "))
     if is_bot(user_agent):
         return None
@@ -109,110 +190,124 @@ def enrich_entry(entry: dict[str, str], reader: geoip2.database.Reader) -> dict[
     except geoip2.errors.AddressNotFoundError:
         pass
 
-    rdns = reverse_dns(ip)
+    # One rDNS lookup per unique IP per invocation — a single page view
+    # generates ~30 asset requests from the same IP.
+    if ip not in rdns_cache:
+        rdns_cache[ip] = reverse_dns(ip)
+    rdns = rdns_cache[ip]
+
     referer = entry["referer"] if entry["referer"] != "-" else ""
 
-    return {
-        "timestamp": f"{entry['date']}T{entry['time']}Z",
-        "client_ip": ip,
-        "city": city,
-        "country": country,
-        "rdns": rdns,
-        "path": entry["uri_stem"],
-        "referer": unquote(referer.replace("+", " ")),
-        "user_agent": user_agent,
-        "status": int(entry["status"]),
-        "bytes_sent": int(entry["sc_bytes"]),
-        "method": entry["method"],
-    }
+    status_raw = entry["status"]
+    bytes_raw = entry["sc_bytes"]
+
+    return EnrichedRecord(
+        timestamp=f"{entry['date']}T{entry['time']}Z",
+        client_ip=ip,
+        city=city,
+        country=country,
+        rdns=rdns,
+        path=entry["uri_stem"],
+        referer=unquote(referer.replace("+", " ")),
+        user_agent=user_agent,
+        status=int(status_raw) if status_raw.isdigit() else 0,
+        bytes_sent=int(bytes_raw) if bytes_raw.isdigit() else 0,
+        method=entry["method"],
+    )
 
 
-def check_deep_browse(records: list[dict[str, Any]]) -> list[str]:
+def check_deep_browse(records: list[EnrichedRecord]) -> list[Alert]:
     ip_pages: dict[str, set[str]] = defaultdict(set)
-    ip_meta: dict[str, dict[str, Any]] = {}
+    ip_meta: dict[str, EnrichedRecord] = {}
 
     for r in records:
         if r["country"] not in TARGET_COUNTRIES:
             continue
-        path = r["path"]
-        if is_static_asset(path):
+        if is_static_asset(r["path"]):
             continue
-        ip_pages[r["client_ip"]].add(path)
+        ip_pages[r["client_ip"]].add(r["path"])
         ip_meta[r["client_ip"]] = r
 
-    alerts = []
+    alerts: list[Alert] = []
     for ip, pages in ip_pages.items():
-        if len(pages) >= 3:
-            meta = ip_meta[ip]
-            page_list = "\n".join(f"  \u2022 {p}" for p in sorted(pages))
-            alerts.append(
-                f"\U0001f514 Deep Browse Alert \u2014 {meta['city']}, {meta['country']}\n\n"
-                f"A visitor from {meta['city']} browsed {len(pages)} pages on your site:\n"
-                f"{page_list}\n\n"
-                f"User-Agent: {meta['user_agent']}\n"
-                f"Referer: {meta['referer'] or 'direct'}\n"
-                f"Reverse DNS: {meta['rdns'] or 'N/A'}\n"
-                f"Time: {meta['timestamp']}"
-            )
+        if len(pages) < DEEP_BROWSE_MIN_PAGES:
+            continue
+        meta = ip_meta[ip]
+        page_list = "\n".join(f"  \u2022 {p}" for p in sorted(pages))
+        message = (
+            f"\U0001f514 Deep Browse Alert \u2014 {meta['city']}, {meta['country']}\n\n"
+            f"A visitor from {meta['city']} browsed {len(pages)} pages on your site:\n"
+            f"{page_list}\n\n"
+            f"User-Agent: {meta['user_agent']}\n"
+            f"Referer: {meta['referer'] or 'direct'}\n"
+            f"Reverse DNS: {meta['rdns'] or 'N/A'}\n"
+            f"Time: {meta['timestamp']}"
+        )
+        alerts.append(Alert(type="deep_browse", dedup_id=ip, message=message))
     return alerts
 
 
-def check_city_cluster(records: list[dict[str, Any]]) -> list[str]:
+def check_city_cluster(records: list[EnrichedRecord]) -> list[Alert]:
     city_ips: dict[str, set[str]] = defaultdict(set)
     for r in records:
         if r["city"]:
             city_ips[r["city"]].add(r["client_ip"])
 
-    alerts = []
+    alerts: list[Alert] = []
     for city, ips in city_ips.items():
-        if len(ips) >= 3:
-            alerts.append(
-                f"\U0001f514 City Cluster Alert \u2014 {city}\n\n"
-                f"{len(ips)} unique visitors from {city} visited your site today."
-            )
+        if len(ips) < CITY_CLUSTER_MIN_IPS:
+            continue
+        message = (
+            f"\U0001f514 City Cluster Alert \u2014 {city}\n\n"
+            f"{len(ips)} unique visitors from {city} visited your site today."
+        )
+        alerts.append(Alert(type="city_cluster", dedup_id=slugify(city), message=message))
     return alerts
 
 
-def alert_already_sent(alert_hash: str, today_prefix: str) -> bool:
-    marker_key = f"alerts/{today_prefix}{alert_hash}.sent"
+def marker_key(alert: Alert, date_str: str) -> str:
+    return f"alerts/{alert.type}/{date_str}/{alert.dedup_id}.sent"
+
+
+def alert_already_sent(key: str) -> bool:
     try:
-        s3.head_object(Bucket=BUCKET, Key=marker_key)
+        s3.head_object(Bucket=BUCKET, Key=key)
         return True
-    except s3.exceptions.ClientError:
-        return False
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise
 
 
-def mark_alert_sent(alert_hash: str, today_prefix: str) -> None:
-    marker_key = f"alerts/{today_prefix}{alert_hash}.sent"
-    s3.put_object(Bucket=BUCKET, Key=marker_key, Body=b"")
+def mark_alert_sent(key: str) -> None:
+    s3.put_object(Bucket=BUCKET, Key=key, Body=b"")
 
 
-def publish_alert(message: str, today_prefix: str = "") -> None:
-    alert_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
-    if today_prefix and alert_already_sent(alert_hash, today_prefix):
+def publish_alert(alert: Alert, date_str: str) -> None:
+    key = marker_key(alert, date_str)
+    if alert_already_sent(key):
         return
     sns.publish(
         TopicArn=SNS_TOPIC_ARN,
         Subject="francescoalbanese.dev \u2014 Visitor Alert",
-        Message=message,
+        Message=alert.message,
     )
-    if today_prefix:
-        mark_alert_sent(alert_hash, today_prefix)
+    mark_alert_sent(key)
 
 
-def load_todays_records(today_prefix: str) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
+def load_records_for_prefix(prefix: str) -> list[EnrichedRecord]:
+    records: list[EnrichedRecord] = []
     paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=today_prefix):
+    for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix):
         for obj in page.get("Contents", []):
             body = s3.get_object(Bucket=BUCKET, Key=obj["Key"])["Body"].read()
             for line in body.decode("utf-8").strip().split("\n"):
                 if line:
-                    records.append(json.loads(line))
+                    records.append(cast(EnrichedRecord, json.loads(line)))
     return records
 
 
-def handler(event: dict, context: Any) -> None:
+def handler(event: dict, context: object) -> None:
     record = event["Records"][0]
     bucket = record["s3"]["bucket"]["name"]
     key = record["s3"]["object"]["key"]
@@ -226,32 +321,35 @@ def handler(event: dict, context: Any) -> None:
     reader = get_geoip_reader()
     entries = parse_cf_log(raw)
 
-    enriched: list[dict[str, Any]] = []
+    rdns_cache: dict[str, str] = {}
+    enriched: list[EnrichedRecord] = []
     for entry in entries:
-        record_data = enrich_entry(entry, reader)
+        record_data = enrich_entry(entry, reader, rdns_cache)
         if record_data:
             enriched.append(record_data)
 
-    now = datetime.now(UTC)
+    event_date = event_date_from_key(key)
+    date_partition = f"{event_date.year}/{event_date.month:02d}/{event_date.day:02d}"
+    date_str = event_date.strftime("%Y-%m-%d")
+
     filename = key.split("/")[-1].replace(".gz", ".jsonl")
-    output_key = f"enriched/{now.year}/{now.month:02d}/{now.day:02d}/{filename}"
+    output_key = f"enriched/{date_partition}/{filename}"
 
     jsonl = "\n".join(json.dumps(r) for r in enriched) if enriched else ""
     s3.put_object(Bucket=BUCKET, Key=output_key, Body=jsonl.encode("utf-8"))
 
-    today_prefix = f"enriched/{now.year}/{now.month:02d}/{now.day:02d}/"
-    all_today = load_todays_records(today_prefix)
+    day_prefix = f"enriched/{date_partition}/"
+    day_records = load_records_for_prefix(day_prefix)
 
-    alert_date_prefix = f"{now.year}/{now.month:02d}/{now.day:02d}/"
-    for alert in check_deep_browse(all_today):
-        publish_alert(alert, alert_date_prefix)
+    for alert in check_deep_browse(day_records):
+        publish_alert(alert, date_str)
 
-    for alert in check_city_cluster(all_today):
-        publish_alert(alert, alert_date_prefix)
+    for alert in check_city_cluster(day_records):
+        publish_alert(alert, date_str)
 
     logger.info(
-        "Processed %d entries, enriched %d, total today %d",
+        "Processed %d entries, enriched %d, day total %d",
         len(entries),
         len(enriched),
-        len(all_today),
+        len(day_records),
     )

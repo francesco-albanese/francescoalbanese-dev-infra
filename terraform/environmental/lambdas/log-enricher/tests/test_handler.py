@@ -202,9 +202,11 @@ class TestDeepBrowseAlert:
             handler(event, None)
 
         mock_publish.assert_called()
-        alert_msg = mock_publish.call_args[0][0]
-        assert "Deep Browse" in alert_msg
-        assert "London" in alert_msg
+        alert = mock_publish.call_args[0][0]
+        assert alert.type == "deep_browse"
+        assert alert.dedup_id == "203.0.113.1"
+        assert "Deep Browse" in alert.message
+        assert "London" in alert.message
 
     def test_excludes_static_assets_from_page_count(self, aws_clients, mock_geoip_reader):
         s3, sns = aws_clients
@@ -280,10 +282,10 @@ class TestCityClusterAlert:
 
             handler(event, None)
 
-        calls = [c[0][0] for c in mock_publish.call_args_list]
-        cluster_alerts = [c for c in calls if "Cluster" in c or "unique visitor" in c.lower()]
+        alerts = [c[0][0] for c in mock_publish.call_args_list]
+        cluster_alerts = [a for a in alerts if a.type == "city_cluster"]
         assert len(cluster_alerts) >= 1
-        assert "London" in cluster_alerts[0]
+        assert "London" in cluster_alerts[0].message
 
 
 class TestEdgeCases:
@@ -360,6 +362,61 @@ class TestAlertDeduplication:
         assert second_call_count == first_call_count
 
 
+class TestRdnsCache:
+    def test_reverse_dns_called_once_per_unique_ip(self, aws_clients, mock_geoip_reader):
+        s3, _ = aws_clients
+        log_key = "cf-logs/E1234.2026-04-14-15.rdns.gz"
+        log_content = build_cf_log(
+            [
+                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/"),
+                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/_astro/a.js"),
+                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/favicon.ico"),
+                make_cf_log_line(c_ip="203.0.113.2", uri_stem="/"),
+                make_cf_log_line(c_ip="203.0.113.2", uri_stem="/style.css"),
+            ]
+        )
+        upload_cf_log(s3, log_key, log_content)
+        event = make_s3_event(BUCKET_NAME, log_key)
+
+        with (
+            patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader),
+            patch("log_enricher.handler.reverse_dns", return_value="host.example.com") as mock_rdns,
+        ):
+            from log_enricher.handler import handler
+
+            handler(event, None)
+
+        # Two unique IPs, five log lines → exactly two rDNS lookups.
+        assert mock_rdns.call_count == 2
+
+
+class TestAlertMarkerKey:
+    def test_dedup_marker_uses_type_date_ip(self, aws_clients, mock_geoip_reader):
+        s3, _ = aws_clients
+        log_key = "cf-logs/E1234.2026-04-14-15.marker.gz"
+        log_content = build_cf_log(
+            [
+                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/"),
+                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/projects"),
+                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/cv"),
+            ]
+        )
+        upload_cf_log(s3, log_key, log_content)
+        event = make_s3_event(BUCKET_NAME, log_key)
+
+        with (
+            patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader),
+            patch("log_enricher.handler.reverse_dns", return_value=""),
+        ):
+            from log_enricher.handler import handler
+
+            handler(event, None)
+
+        response = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix="alerts/deep_browse/2026-04-14/")
+        keys = [obj["Key"] for obj in response.get("Contents", [])]
+        assert "alerts/deep_browse/2026-04-14/203.0.113.1.sent" in keys
+
+
 class TestAlertMessageContent:
     def test_deep_browse_alert_includes_pages_ua_rdns_referer(self, aws_clients, mock_geoip_reader):
         s3, sns = aws_clients
@@ -387,8 +444,8 @@ class TestAlertMessageContent:
 
             handler(event, None)
 
-        alert_msg = mock_publish.call_args_list[0][0][0]
-        assert "/projects" in alert_msg
-        assert "/cv" in alert_msg
-        assert "barclays.co.uk" in alert_msg
-        assert "linkedin.com" in alert_msg
+        alert = mock_publish.call_args_list[0][0][0]
+        assert "/projects" in alert.message
+        assert "/cv" in alert.message
+        assert "barclays.co.uk" in alert.message
+        assert "linkedin.com" in alert.message

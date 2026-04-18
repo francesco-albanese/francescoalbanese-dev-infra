@@ -113,7 +113,13 @@
         fetch(DATA_URL)
           .then(r => r.json())
           .then(render)
-          .catch(e => { document.body.innerHTML = '<div class="loading">Failed to load data: ' + e.message + '</div>'; });
+          .catch(e => {
+            document.body.textContent = '';
+            const err = document.createElement('div');
+            err.className = 'loading';
+            err.textContent = 'Failed to load data: ' + e.message;
+            document.body.appendChild(err);
+          });
       }
     }
 

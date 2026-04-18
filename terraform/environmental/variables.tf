@@ -30,3 +30,21 @@ variable "shared_services_role_name" {
   type        = string
   default     = "terraform"
 }
+
+variable "image_tag_log_enricher" {
+  description = "Docker image tag for log-enricher Lambda (typically the commit SHA in CI; defaults to 'latest' for local)"
+  type        = string
+  default     = "latest"
+}
+
+variable "image_tag_dashboard_generator" {
+  description = "Docker image tag for dashboard-generator Lambda"
+  type        = string
+  default     = "latest"
+}
+
+variable "analytics_alert_email" {
+  description = "Email address subscribed to analytics SNS alerts"
+  type        = string
+  default     = "hello@francescoalbanese.dev"
+}

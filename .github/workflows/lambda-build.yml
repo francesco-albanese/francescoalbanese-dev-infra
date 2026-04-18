@@ -1,0 +1,144 @@
+name: Build Lambda Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/environmental/lambdas/**"
+      - ".github/workflows/lambda-build.yml"
+  pull_request:
+    paths:
+      - "terraform/environmental/lambdas/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: lambda-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: eu-west-2
+  PROJECT_PREFIX: francescoalbanese-dev
+  MAXMIND_SSM_PARAMETER: /francescoalbanese-dev/maxmind-license-key
+
+jobs:
+  detect:
+    name: Detect lambdas
+    runs-on: ubuntu-latest
+    outputs:
+      lambdas: ${{ steps.detect.outputs.lambdas }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: detect
+        run: |
+          lambdas=$(find terraform/environmental/lambdas -maxdepth 2 -name pyproject.toml \
+            -exec dirname {} \; | xargs -I {} basename {} | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "lambdas=$lambdas" >> "$GITHUB_OUTPUT"
+          echo "Detected: $lambdas"
+
+  build-and-push:
+    name: Build ${{ matrix.lambda }}
+    needs: detect
+    runs-on: ubuntu-latest
+    if: needs.detect.outputs.lambdas != '[]'
+    environment: sandbox
+
+    strategy:
+      fail-fast: false
+      matrix:
+        lambda: ${{ fromJson(needs.detect.outputs.lambdas) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine GeoIP inclusion
+        id: geoip
+        run: |
+          if [ "${{ matrix.lambda }}" = "log-enricher" ]; then
+            echo "include=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "include=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute ISO week for cache key
+        if: steps.geoip.outputs.include == 'true'
+        id: week
+        run: echo "iso=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache GeoLite2-City database (weekly)
+        if: steps.geoip.outputs.include == 'true'
+        id: cache-geoip
+        uses: actions/cache@v4
+        with:
+          path: terraform/environmental/lambdas/data/GeoLite2-City.mmdb
+          key: geolite2-city-${{ steps.week.outputs.iso }}
+
+      - name: Download GeoLite2-City database
+        if: steps.geoip.outputs.include == 'true' && steps.cache-geoip.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p terraform/environmental/lambdas/data
+          license_key=$(aws ssm get-parameter \
+            --name "${MAXMIND_SSM_PARAMETER}" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text)
+          curl -fsSL -o /tmp/geoip.tar.gz \
+            "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${license_key}&suffix=tar.gz"
+          tar -xzf /tmp/geoip.tar.gz -C /tmp
+          mv /tmp/GeoLite2-City_*/GeoLite2-City.mmdb terraform/environmental/lambdas/data/GeoLite2-City.mmdb
+          rm -rf /tmp/geoip.tar.gz /tmp/GeoLite2-City_*
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build and push ${{ matrix.lambda }}
+        uses: docker/build-push-action@v6
+        with:
+          context: terraform/environmental/lambdas
+          file: terraform/environmental/lambdas/Dockerfile.analytics
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          build-args: |
+            LAMBDA_DIR=${{ matrix.lambda }}
+            PACKAGE_NAME=${{ matrix.lambda == 'log-enricher' && 'log_enricher' || 'dashboard_generator' }}
+            INCLUDE_GEOIP=${{ steps.geoip.outputs.include }}
+          cache-from: type=gha,scope=${{ matrix.lambda }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.lambda }}
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.PROJECT_PREFIX }}-${{ matrix.lambda }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.PROJECT_PREFIX }}-${{ matrix.lambda }}:latest
+
+  deploy:
+    name: Deploy lambdas
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/terraform-deploy.yml
+    with:
+      log_enricher_image_tag: ${{ github.sha }}
+      dashboard_generator_image_tag: ${{ github.sha }}
+      auto_apply: true
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read

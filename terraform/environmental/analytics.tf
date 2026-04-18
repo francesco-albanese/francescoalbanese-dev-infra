@@ -1,30 +1,43 @@
-# ─── Analytics: S3 Bucket ─────────────────────────────────────────────────────
+# ─── Analytics: Locals ────────────────────────────────────────────────────────
 
 locals {
   analytics_bucket_name = "${local.project_prefix}-analytics-${var.account_id}"
+
+  analytics_tags = {
+    "franco:terraform_stack" = "francescoalbanese-dev-infra-analytics"
+    "franco:environment"     = var.account_name
+    "franco:managed_by"      = "terraform"
+  }
 }
+
+# ─── Analytics: ECR data lookups ─────────────────────────────────────────────
+# Repos are owned by the terraform/ecr stack. Apply that stack — and push at
+# least one image to each repo — before applying this stack.
+
+data "aws_ecr_repository" "log_enricher" {
+  name = "${local.project_prefix}-log-enricher"
+}
+
+data "aws_ecr_repository" "dashboard_generator" {
+  name = "${local.project_prefix}-dashboard-generator"
+}
+
+# ─── Analytics: S3 Bucket ─────────────────────────────────────────────────────
 
 resource "aws_s3_bucket" "analytics" {
   bucket = local.analytics_bucket_name
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-analytics"
-  }
+  })
 }
 
-# ACLs required for CloudFront standard log delivery
 resource "aws_s3_bucket_ownership_controls" "analytics" {
   bucket = aws_s3_bucket.analytics.id
 
   rule {
-    object_ownership = "BucketOwnerPreferred"
+    object_ownership = "BucketOwnerEnforced"
   }
-}
-
-resource "aws_s3_bucket_acl" "analytics" {
-  depends_on = [aws_s3_bucket_ownership_controls.analytics]
-  bucket     = aws_s3_bucket.analytics.id
-  acl        = "log-delivery-write"
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "analytics" {
@@ -50,76 +63,130 @@ resource "aws_s3_bucket_lifecycle_configuration" "analytics" {
   bucket = aws_s3_bucket.analytics.id
 
   rule {
-    id     = "delete-after-90-days"
+    id     = "cf-logs"
     status = "Enabled"
+    filter {
+      prefix = "cf-logs/"
+    }
+    expiration {
+      days = 7
+    }
+  }
 
+  rule {
+    id     = "enriched"
+    status = "Enabled"
+    filter {
+      prefix = "enriched/"
+    }
     expiration {
       days = 90
     }
   }
-}
 
-# ─── Analytics: ECR Repositories ─────────────────────────────────────────────
-
-resource "aws_ecr_repository" "log_enricher" {
-  name                 = "${local.project_prefix}-log-enricher"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
-
-  image_scanning_configuration {
-    scan_on_push = true
+  rule {
+    id     = "dashboard"
+    status = "Enabled"
+    filter {
+      prefix = "dashboard/"
+    }
+    expiration {
+      days = 7
+    }
   }
 
-  tags = {
-    Name = "${local.project_prefix}-log-enricher"
-  }
-}
-
-resource "aws_ecr_repository" "dashboard_generator" {
-  name                 = "${local.project_prefix}-dashboard-generator"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  tags = {
-    Name = "${local.project_prefix}-dashboard-generator"
+  rule {
+    id     = "alerts"
+    status = "Enabled"
+    filter {
+      prefix = "alerts/"
+    }
+    expiration {
+      days = 30
+    }
   }
 }
 
-resource "aws_ecr_lifecycle_policy" "log_enricher" {
-  repository = aws_ecr_repository.log_enricher.name
+# ─── Analytics: CloudFront v2 standard logging → S3 ──────────────────────────
+
+resource "aws_cloudwatch_log_delivery_source" "cloudfront" {
+  name         = "${local.project_prefix}-cloudfront-access-logs"
+  resource_arn = aws_cloudfront_distribution.site.arn
+  log_type     = "ACCESS_LOGS"
+
+  tags = local.analytics_tags
+}
+
+resource "aws_cloudwatch_log_delivery_destination" "cloudfront_s3" {
+  name          = "${local.project_prefix}-cloudfront-s3"
+  output_format = "w3c"
+
+  delivery_destination_configuration {
+    destination_resource_arn = aws_s3_bucket.analytics.arn
+  }
+
+  tags = local.analytics_tags
+}
+
+resource "aws_cloudwatch_log_delivery" "cloudfront" {
+  delivery_source_name     = aws_cloudwatch_log_delivery_source.cloudfront.name
+  delivery_destination_arn = aws_cloudwatch_log_delivery_destination.cloudfront_s3.arn
+
+  depends_on = [aws_s3_bucket_policy.analytics_cf_logs]
+
+  # Only the fields the log-enricher actually parses — trims storage + parse cost.
+  record_fields = [
+    "date",
+    "time",
+    "sc-bytes",
+    "c-ip",
+    "cs-method",
+    "cs-uri-stem",
+    "sc-status",
+    "cs(Referer)",
+    "cs(User-Agent)",
+  ]
+
+  s3_delivery_configuration {
+    suffix_path = "cf-logs"
+  }
+
+  tags = local.analytics_tags
+}
+
+resource "aws_s3_bucket_policy" "analytics_cf_logs" {
+  bucket = aws_s3_bucket.analytics.id
 
   policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep last 5 images"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 5
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AWSLogDeliveryWrite"
+        Effect    = "Allow"
+        Principal = { Service = "delivery.logs.amazonaws.com" }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.analytics.arn}/cf-logs/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"      = "bucket-owner-full-control"
+            "aws:SourceAccount" = var.account_id
+          }
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:logs:${var.region}:${var.account_id}:delivery-source:*"
+          }
+        }
+      },
+      {
+        Sid       = "AWSLogDeliveryAclCheck"
+        Effect    = "Allow"
+        Principal = { Service = "delivery.logs.amazonaws.com" }
+        Action    = "s3:GetBucketAcl"
+        Resource  = aws_s3_bucket.analytics.arn
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = var.account_id }
+        }
       }
-      action = { type = "expire" }
-    }]
-  })
-}
-
-resource "aws_ecr_lifecycle_policy" "dashboard_generator" {
-  repository = aws_ecr_repository.dashboard_generator.name
-
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep last 5 images"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 5
-      }
-      action = { type = "expire" }
-    }]
+    ]
   })
 }
 
@@ -137,9 +204,9 @@ resource "aws_iam_role" "log_enricher" {
     }]
   })
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-log-enricher"
-  }
+  })
 }
 
 resource "aws_iam_role_policy" "log_enricher" {
@@ -156,9 +223,9 @@ resource "aws_iam_role_policy" "log_enricher" {
         Resource = "${aws_s3_bucket.analytics.arn}/cf-logs/*"
       },
       {
-        Sid    = "ReadWriteEnriched"
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject"]
+        Sid      = "WriteEnriched"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject"]
         Resource = "${aws_s3_bucket.analytics.arn}/enriched/*"
       },
       {
@@ -173,9 +240,9 @@ resource "aws_iam_role_policy" "log_enricher" {
         }
       },
       {
-        Sid    = "AlertDeduplication"
-        Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject", "s3:HeadObject"]
+        Sid      = "AlertDeduplication"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject"]
         Resource = "${aws_s3_bucket.analytics.arn}/alerts/*"
       },
       {
@@ -209,9 +276,9 @@ resource "aws_iam_role" "dashboard_generator" {
     }]
   })
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-dashboard-generator"
-  }
+  })
 }
 
 resource "aws_iam_role_policy" "dashboard_generator" {
@@ -222,9 +289,9 @@ resource "aws_iam_role_policy" "dashboard_generator" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "ReadEnriched"
-        Effect = "Allow"
-        Action = ["s3:GetObject"]
+        Sid      = "ReadEnriched"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
         Resource = "${aws_s3_bucket.analytics.arn}/enriched/*"
       },
       {
@@ -239,9 +306,9 @@ resource "aws_iam_role_policy" "dashboard_generator" {
         }
       },
       {
-        Sid    = "WriteDashboard"
-        Effect = "Allow"
-        Action = ["s3:PutObject", "s3:GetObject"]
+        Sid      = "WriteDashboard"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
         Resource = "${aws_s3_bucket.analytics.arn}/dashboard/*"
       },
       {
@@ -263,18 +330,18 @@ resource "aws_cloudwatch_log_group" "log_enricher" {
   name              = "/aws/lambda/${local.project_prefix}-log-enricher"
   retention_in_days = 30
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-log-enricher"
-  }
+  })
 }
 
 resource "aws_cloudwatch_log_group" "dashboard_generator" {
   name              = "/aws/lambda/${local.project_prefix}-dashboard-generator"
   retention_in_days = 30
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-dashboard-generator"
-  }
+  })
 }
 
 # ─── Analytics: Lambda Functions ──────────────────────────────────────────────
@@ -283,7 +350,7 @@ resource "aws_lambda_function" "log_enricher" {
   function_name = "${local.project_prefix}-log-enricher"
   role          = aws_iam_role.log_enricher.arn
   package_type  = "Image"
-  image_uri     = "${aws_ecr_repository.log_enricher.repository_url}:latest"
+  image_uri     = "${data.aws_ecr_repository.log_enricher.repository_url}:${var.image_tag_log_enricher}"
   architectures = ["arm64"]
   timeout       = 60
   memory_size   = 256
@@ -298,16 +365,16 @@ resource "aws_lambda_function" "log_enricher" {
 
   depends_on = [aws_cloudwatch_log_group.log_enricher]
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-log-enricher"
-  }
+  })
 }
 
 resource "aws_lambda_function" "dashboard_generator" {
   function_name = "${local.project_prefix}-dashboard-generator"
   role          = aws_iam_role.dashboard_generator.arn
   package_type  = "Image"
-  image_uri     = "${aws_ecr_repository.dashboard_generator.repository_url}:latest"
+  image_uri     = "${data.aws_ecr_repository.dashboard_generator.repository_url}:${var.image_tag_dashboard_generator}"
   architectures = ["arm64"]
   timeout       = 120
   memory_size   = 512
@@ -320,19 +387,12 @@ resource "aws_lambda_function" "dashboard_generator" {
 
   depends_on = [aws_cloudwatch_log_group.dashboard_generator]
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-dashboard-generator"
-  }
+  })
 }
 
-# ─── Analytics: Lambda Function URL (dashboard) ──────────────────────────────
-
-resource "aws_lambda_function_url" "dashboard_generator" {
-  function_name      = aws_lambda_function.dashboard_generator.function_name
-  authorization_type = "NONE"
-}
-
-# ─── Analytics: S3 Event → Lambda trigger ─────────────────────────────────────
+# ─── Analytics: S3 Event → log-enricher trigger ───────────────────────────────
 
 resource "aws_lambda_permission" "s3_invoke_log_enricher" {
   statement_id   = "AllowS3Invoke"
@@ -360,35 +420,25 @@ resource "aws_s3_bucket_notification" "analytics" {
 resource "aws_sns_topic" "analytics_alerts" {
   name = "${local.project_prefix}-analytics-alerts"
 
-  tags = {
+  tags = merge(local.analytics_tags, {
     Name = "${local.project_prefix}-analytics-alerts"
-  }
+  })
 }
 
 resource "aws_sns_topic_subscription" "analytics_email" {
   topic_arn = aws_sns_topic.analytics_alerts.arn
   protocol  = "email"
-  endpoint  = "hello@francescoalbanese.dev"
+  endpoint  = var.analytics_alert_email
 }
 
 # ─── Analytics: Outputs ──────────────────────────────────────────────────────
-
-output "dashboard_function_url" {
-  description = "Bookmark this URL to access the analytics dashboard"
-  value       = aws_lambda_function_url.dashboard_generator.function_url
-}
 
 output "analytics_bucket_name" {
   description = "Analytics S3 bucket name"
   value       = aws_s3_bucket.analytics.id
 }
 
-output "log_enricher_ecr_uri" {
-  description = "ECR repository URI for log-enricher Lambda"
-  value       = aws_ecr_repository.log_enricher.repository_url
-}
-
-output "dashboard_generator_ecr_uri" {
-  description = "ECR repository URI for dashboard-generator Lambda"
-  value       = aws_ecr_repository.dashboard_generator.repository_url
+output "dashboard_generator_function_name" {
+  description = "Dashboard Lambda function name (invoke via `make dashboard`)"
+  value       = aws_lambda_function.dashboard_generator.function_name
 }

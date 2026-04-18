@@ -110,11 +110,8 @@ resource "aws_cloudfront_distribution" "site" {
   aliases             = [var.domain_name, "www.${var.domain_name}"]
   price_class         = "PriceClass_100"
 
-  logging_config {
-    bucket          = aws_s3_bucket.analytics.bucket_domain_name
-    prefix          = "cf-logs/"
-    include_cookies = false
-  }
+  # Access logs delivered via CloudWatch Logs delivery (CloudFront v2 standard
+  # logging) — configured in analytics.tf.
 
   origin {
     domain_name              = aws_s3_bucket.site.bucket_regional_domain_name

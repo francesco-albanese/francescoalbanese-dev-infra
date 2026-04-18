@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.96.2
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_tflint
+        args: [--args=--chdir=terraform]
+
+  - repo: local
+    hooks:
+      - id: pyright-log-enricher
+        name: pyright (log-enricher)
+        entry: bash -c 'cd terraform/environmental/lambdas/log-enricher && uv run pyright'
+        language: system
+        types: [python]
+        files: ^terraform/environmental/lambdas/log-enricher/
+        pass_filenames: false
+
+      - id: pyright-dashboard-generator
+        name: pyright (dashboard-generator)
+        entry: bash -c 'cd terraform/environmental/lambdas/dashboard-generator && uv run pyright'
+        language: system
+        types: [python]
+        files: ^terraform/environmental/lambdas/dashboard-generator/
+        pass_filenames: false
