@@ -110,6 +110,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "analytics" {
 # ─── Analytics: CloudFront v2 standard logging → S3 ──────────────────────────
 
 resource "aws_cloudwatch_log_delivery_source" "cloudfront" {
+  provider = aws.us_east_1
+
   name         = "${local.project_prefix}-cloudfront-access-logs"
   resource_arn = aws_cloudfront_distribution.site.arn
   log_type     = "ACCESS_LOGS"
@@ -118,6 +120,8 @@ resource "aws_cloudwatch_log_delivery_source" "cloudfront" {
 }
 
 resource "aws_cloudwatch_log_delivery_destination" "cloudfront_s3" {
+  provider = aws.us_east_1
+
   name          = "${local.project_prefix}-cloudfront-s3"
   output_format = "w3c"
 
@@ -129,6 +133,8 @@ resource "aws_cloudwatch_log_delivery_destination" "cloudfront_s3" {
 }
 
 resource "aws_cloudwatch_log_delivery" "cloudfront" {
+  provider = aws.us_east_1
+
   delivery_source_name     = aws_cloudwatch_log_delivery_source.cloudfront.name
   delivery_destination_arn = aws_cloudwatch_log_delivery_destination.cloudfront_s3.arn
 
@@ -172,7 +178,7 @@ resource "aws_s3_bucket_policy" "analytics_cf_logs" {
             "aws:SourceAccount" = var.account_id
           }
           ArnLike = {
-            "aws:SourceArn" = "arn:aws:logs:${var.region}:${var.account_id}:delivery-source:*"
+            "aws:SourceArn" = "arn:aws:logs:us-east-1:${var.account_id}:delivery-source:*"
           }
         }
       },
