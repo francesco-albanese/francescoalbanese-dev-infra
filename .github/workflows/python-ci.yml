@@ -21,7 +21,7 @@ jobs:
     outputs:
       lambdas: ${{ steps.detect.outputs.lambdas }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: detect
         run: |
           lambdas=$(find terraform/environmental/lambdas -maxdepth 2 -name pyproject.toml \
@@ -41,7 +41,7 @@ jobs:
         lambda: ${{ fromJson(needs.detect.outputs.lambdas) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
