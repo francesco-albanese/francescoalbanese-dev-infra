@@ -110,8 +110,15 @@ resource "aws_cloudfront_distribution" "site" {
   aliases             = [var.domain_name, "www.${var.domain_name}"]
   price_class         = "PriceClass_100"
 
-  # Access logs delivered via CloudWatch Logs delivery (CloudFront v2 standard
-  # logging) — configured in analytics.tf.
+  # CloudFront v1 access logging → analytics bucket (cf-logs/ prefix).
+  # Triggers the log-enricher Lambda via S3 ObjectCreated events.
+  logging_config {
+    bucket          = "${aws_s3_bucket.analytics.id}.s3.amazonaws.com"
+    prefix          = "cf-logs/"
+    include_cookies = false
+  }
+
+  depends_on = [aws_s3_bucket_acl.analytics]
 
   origin {
     domain_name              = aws_s3_bucket.site.bucket_regional_domain_name

@@ -35,9 +35,42 @@ resource "aws_s3_bucket" "analytics" {
 resource "aws_s3_bucket_ownership_controls" "analytics" {
   bucket = aws_s3_bucket.analytics.id
 
+  # BucketOwnerPreferred (not Enforced) because CloudFront v1 access logging
+  # writes via ACLs; v2 supported no-ACLs but is cross-region-locked.
   rule {
-    object_ownership = "BucketOwnerEnforced"
+    object_ownership = "BucketOwnerPreferred"
   }
+}
+
+data "aws_canonical_user_id" "current" {}
+
+resource "aws_s3_bucket_acl" "analytics" {
+  bucket = aws_s3_bucket.analytics.id
+
+  access_control_policy {
+    owner {
+      id = data.aws_canonical_user_id.current.id
+    }
+
+    grant {
+      grantee {
+        id   = data.aws_canonical_user_id.current.id
+        type = "CanonicalUser"
+      }
+      permission = "FULL_CONTROL"
+    }
+
+    # CloudFront log-delivery canonical user (static, AWS-owned).
+    grant {
+      grantee {
+        id   = "c4c1ede66af53448b93c283ce9448c4ba468c9432aa01d700d3878632f77d2d0"
+        type = "CanonicalUser"
+      }
+      permission = "FULL_CONTROL"
+    }
+  }
+
+  depends_on = [aws_s3_bucket_ownership_controls.analytics]
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "analytics" {
@@ -107,94 +140,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "analytics" {
   }
 }
 
-# ─── Analytics: CloudFront v2 standard logging → S3 ──────────────────────────
-
-resource "aws_cloudwatch_log_delivery_source" "cloudfront" {
-  provider = aws.us_east_1
-
-  name         = "${local.project_prefix}-cloudfront-access-logs"
-  resource_arn = aws_cloudfront_distribution.site.arn
-  log_type     = "ACCESS_LOGS"
-
-  tags = local.analytics_tags
-}
-
-resource "aws_cloudwatch_log_delivery_destination" "cloudfront_s3" {
-  provider = aws.us_east_1
-
-  name          = "${local.project_prefix}-cloudfront-s3"
-  output_format = "w3c"
-
-  delivery_destination_configuration {
-    destination_resource_arn = aws_s3_bucket.analytics.arn
-  }
-
-  tags = local.analytics_tags
-}
-
-resource "aws_cloudwatch_log_delivery" "cloudfront" {
-  provider = aws.us_east_1
-
-  delivery_source_name     = aws_cloudwatch_log_delivery_source.cloudfront.name
-  delivery_destination_arn = aws_cloudwatch_log_delivery_destination.cloudfront_s3.arn
-
-  depends_on = [aws_s3_bucket_policy.analytics_cf_logs]
-
-  # Only the fields the log-enricher actually parses — trims storage + parse cost.
-  record_fields = [
-    "date",
-    "time",
-    "sc-bytes",
-    "c-ip",
-    "cs-method",
-    "cs-uri-stem",
-    "sc-status",
-    "cs(Referer)",
-    "cs(User-Agent)",
-  ]
-
-  s3_delivery_configuration {
-    suffix_path = "cf-logs"
-  }
-
-  tags = local.analytics_tags
-}
-
-resource "aws_s3_bucket_policy" "analytics_cf_logs" {
-  bucket = aws_s3_bucket.analytics.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "AWSLogDeliveryWrite"
-        Effect    = "Allow"
-        Principal = { Service = "delivery.logs.amazonaws.com" }
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.analytics.arn}/cf-logs/*"
-        Condition = {
-          StringEquals = {
-            "s3:x-amz-acl"      = "bucket-owner-full-control"
-            "aws:SourceAccount" = var.account_id
-          }
-          ArnLike = {
-            "aws:SourceArn" = "arn:aws:logs:us-east-1:${var.account_id}:delivery-source:*"
-          }
-        }
-      },
-      {
-        Sid       = "AWSLogDeliveryAclCheck"
-        Effect    = "Allow"
-        Principal = { Service = "delivery.logs.amazonaws.com" }
-        Action    = "s3:GetBucketAcl"
-        Resource  = aws_s3_bucket.analytics.arn
-        Condition = {
-          StringEquals = { "aws:SourceAccount" = var.account_id }
-        }
-      }
-    ]
-  })
-}
+# CloudFront v1 access logging writes directly to the analytics bucket via the
+# `logging_config` block on aws_cloudfront_distribution.site — see cloudfront.tf.
+# The ACL above grants the CF log-delivery canonical user write access.
 
 # ─── Analytics: IAM Roles ─────────────────────────────────────────────────────
 

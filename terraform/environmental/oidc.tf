@@ -341,6 +341,38 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
         ]
         Resource = "arn:aws:iam::${var.account_id}:policy/${local.project_prefix}-infra-deploy-boundary"
       },
+      {
+        # GetAuthorizationToken is inherently registry-wide — AWS requires "*".
+        # The returned token is scoped to this account's registry.
+        Sid      = "EcrAuth"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPushAnalyticsImages"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:BatchGetImage",
+          "ecr:DescribeRepositories",
+          "ecr:DescribeImages"
+        ]
+        Resource = [
+          "arn:aws:ecr:${var.region}:${var.account_id}:repository/${local.project_prefix}-log-enricher",
+          "arn:aws:ecr:${var.region}:${var.account_id}:repository/${local.project_prefix}-dashboard-generator"
+        ]
+      },
+      {
+        Sid      = "SsmReadMaxMindLicense"
+        Effect   = "Allow"
+        Action   = "ssm:GetParameter"
+        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/${local.project_prefix}/maxmind-license-key"
+      },
     ]
   })
 }
