@@ -1,4 +1,6 @@
 import json
+from datetime import UTC, date, datetime, timedelta
+from unittest.mock import patch
 
 from tests.conftest import (
     BUCKET_NAME,
@@ -22,41 +24,55 @@ def get_dashboard_data(s3_client) -> dict:
 
 class TestVisitsByPeriod:
     def test_counts_today_this_week_this_month(self, s3_client):
-        today = date_str(0)
-        yesterday = date_str(1)
-        week_ago = date_str(6)
+        # Freeze `now` at a midweek day so `this_week` (Mon-based) has room
+        # for prior-day records — otherwise the test fails when run on a Monday.
+        frozen_now = datetime(2026, 4, 15, 12, 0, 0, tzinfo=UTC)
+        today = frozen_now.date()
+        yesterday = today - timedelta(days=1)
+        this_month_only = today.replace(day=1)
+        window_only = today - timedelta(days=20)
+
+        def ts(d: date) -> str:
+            return f"{d.isoformat()}T12:00:00Z"
+
         upload_enriched_records(
             s3_client,
-            today,
+            today.isoformat(),
             [
-                make_record(timestamp=timestamp_str(0)),
-                make_record(timestamp=timestamp_str(0), client_ip="203.0.113.2"),
+                make_record(timestamp=ts(today)),
+                make_record(timestamp=ts(today), client_ip="203.0.113.2"),
             ],
             suffix="a",
         )
         upload_enriched_records(
             s3_client,
-            yesterday,
-            [
-                make_record(timestamp=timestamp_str(1)),
-            ],
+            yesterday.isoformat(),
+            [make_record(timestamp=ts(yesterday))],
             suffix="b",
         )
         upload_enriched_records(
             s3_client,
-            week_ago,
-            [
-                make_record(timestamp=timestamp_str(6)),
-            ],
+            this_month_only.isoformat(),
+            [make_record(timestamp=ts(this_month_only))],
             suffix="c",
         )
+        upload_enriched_records(
+            s3_client,
+            window_only.isoformat(),
+            [make_record(timestamp=ts(window_only))],
+            suffix="d",
+        )
 
-        invoke_handler(s3_client)
+        with patch("dashboard_generator.handler.datetime") as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            invoke_handler(s3_client)
+
         data = get_dashboard_data(s3_client)
 
         assert data["visits"]["today"] == 2
-        assert data["visits"]["this_week"] >= 3
-        assert data["visits"]["this_month"] >= 4
+        assert data["visits"]["this_week"] == 3
+        assert data["visits"]["this_month"] == 4
 
 
 class TestTopCities:
