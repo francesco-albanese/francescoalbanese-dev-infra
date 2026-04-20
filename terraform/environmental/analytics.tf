@@ -1,8 +1,7 @@
 # ─── Analytics: Locals ────────────────────────────────────────────────────────
+# analytics_bucket_name / analytics_bucket_arn live in main.tf alongside site
 
 locals {
-  analytics_bucket_name = "${local.project_prefix}-analytics-${var.account_id}"
-
   analytics_tags = {
     "franco:terraform_stack" = "francescoalbanese-dev-infra-analytics"
     "franco:environment"     = var.account_name
@@ -147,7 +146,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "analytics" {
 # ─── Analytics: IAM Roles ─────────────────────────────────────────────────────
 
 resource "aws_iam_role" "log_enricher" {
-  name = "${local.project_prefix}-log-enricher"
+  name                 = "${local.project_prefix}-log-enricher"
+  permissions_boundary = aws_iam_policy.infra_deploy_boundary.arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -219,7 +219,8 @@ resource "aws_iam_role_policy" "log_enricher" {
 }
 
 resource "aws_iam_role" "dashboard_generator" {
-  name = "${local.project_prefix}-dashboard-generator"
+  name                 = "${local.project_prefix}-dashboard-generator"
+  permissions_boundary = aws_iam_policy.infra_deploy_boundary.arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

@@ -105,7 +105,9 @@ resource "aws_iam_role" "github_actions_infra_deploy" {
   }
 }
 
-# Permissions boundary — caps privileges for any role created by infra deploy
+# Permissions boundary — caps privileges for any role created by infra deploy.
+# Covers both infra deploy roles (site sync + CF invalidation) and lambda
+# runtime roles (analytics bucket access + SNS publish + CloudWatch logs).
 resource "aws_iam_policy" "infra_deploy_boundary" {
   name        = "${local.project_prefix}-infra-deploy-boundary"
   description = "Permissions boundary for roles created by the infra deploy pipeline"
@@ -114,7 +116,7 @@ resource "aws_iam_policy" "infra_deploy_boundary" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AllowS3"
+        Sid    = "AllowS3ManagedBuckets"
         Effect = "Allow"
         Action = [
           "s3:GetObject",
@@ -123,10 +125,10 @@ resource "aws_iam_policy" "infra_deploy_boundary" {
           "s3:ListBucket",
           "s3:GetBucketLocation"
         ]
-        Resource = [
-          local.site_bucket_arn,
-          "${local.site_bucket_arn}/*"
-        ]
+        Resource = concat(
+          local.managed_bucket_arns,
+          [for b in local.managed_bucket_arns : "${b}/*"]
+        )
       },
       {
         Sid      = "AllowCloudFrontInvalidation"
@@ -138,6 +140,21 @@ resource "aws_iam_policy" "infra_deploy_boundary" {
             "aws:ResourceTag/franco:terraform_stack" = "francescoalbanese-dev-infra"
           }
         }
+      },
+      {
+        Sid      = "AllowSNSPublishAnalyticsAlerts"
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
+        Resource = local.analytics_alerts_topic_arn
+      },
+      {
+        Sid    = "AllowCloudWatchLogsWrite"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = local.lambda_log_group_arns_wildcard
       }
     ]
   })
@@ -162,13 +179,22 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
         Resource = "arn:aws:iam::${var.shared_services_account_id}:role/${var.shared_services_role_name}"
       },
       {
-        Sid    = "S3"
+        # S3 bucket-level management on managed buckets (site + analytics).
+        # Object-level CRUD happens via the site-deploy role (see above) and
+        # via lambda runtime roles (see boundary), not here.
+        Sid    = "S3ManagedBuckets"
         Effect = "Allow"
         Action = [
           "s3:GetBucketPolicy",
           "s3:PutBucketPolicy",
+          "s3:DeleteBucketPolicy",
           "s3:GetBucketAcl",
+          "s3:PutBucketAcl",
+          "s3:GetBucketOwnershipControls",
+          "s3:PutBucketOwnershipControls",
+          "s3:DeleteBucketOwnershipControls",
           "s3:GetBucketCORS",
+          "s3:PutBucketCORS",
           "s3:GetBucketWebsite",
           "s3:GetBucketVersioning",
           "s3:GetBucketLogging",
@@ -179,16 +205,28 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "s3:PutBucketPublicAccessBlock",
           "s3:GetBucketRequestPayment",
           "s3:GetLifecycleConfiguration",
+          "s3:PutLifecycleConfiguration",
           "s3:GetReplicationConfiguration",
           "s3:GetEncryptionConfiguration",
           "s3:PutEncryptionConfiguration",
           "s3:GetAccelerateConfiguration",
+          "s3:GetBucketNotification",
+          "s3:PutBucketNotification",
           "s3:CreateBucket",
           "s3:DeleteBucket",
           "s3:ListBucket",
           "s3:PutBucketVersioning"
         ]
-        Resource = local.site_bucket_arn
+        Resource = local.managed_bucket_arns
+      },
+      {
+        # Required by data.aws_canonical_user_id (needed for CloudFront v1
+        # log-delivery ACL on the analytics bucket). ListAllMyBuckets is
+        # inherently global — cannot be ARN-scoped.
+        Sid      = "S3ListAllMyBuckets"
+        Effect   = "Allow"
+        Action   = "s3:ListAllMyBuckets"
+        Resource = "*"
       },
       {
         Sid    = "CloudFrontReadOnly"
@@ -316,13 +354,48 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
         Sid    = "IAMCreateRoleWithBoundary"
         Effect = "Allow"
         Action = "iam:CreateRole"
-        Resource = [
-          "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-github-actions-deploy",
-          "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-infra-github-actions-deploy"
-        ]
+        Resource = concat(
+          [
+            "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-github-actions-deploy",
+            "arn:aws:iam::${var.account_id}:role/${local.project_prefix}-infra-github-actions-deploy"
+          ],
+          local.lambda_role_arns
+        )
         Condition = {
           StringEquals = {
             "iam:PermissionsBoundary" = aws_iam_policy.infra_deploy_boundary.arn
+          }
+        }
+      },
+      {
+        Sid    = "IAMManageLambdaExecRoles"
+        Effect = "Allow"
+        Action = [
+          "iam:GetRole",
+          "iam:DeleteRole",
+          "iam:UpdateRole",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:ListRolePolicies",
+          "iam:GetRolePolicy",
+          "iam:PutRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:PutRolePermissionsBoundary",
+          "iam:DeleteRolePermissionsBoundary"
+        ]
+        Resource = local.lambda_role_arns
+      },
+      {
+        Sid      = "IAMPassRoleToLambda"
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
+        Resource = local.lambda_role_arns
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
           }
         }
       },
@@ -350,7 +423,8 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
         Resource = "*"
       },
       {
-        Sid    = "EcrPushAnalyticsImages"
+        # Push + read (used by docker build-push + terraform data source refresh)
+        Sid    = "EcrPushAndRead"
         Effect = "Allow"
         Action = [
           "ecr:BatchCheckLayerAvailability",
@@ -359,13 +433,100 @@ resource "aws_iam_role_policy" "github_actions_infra_deploy" {
           "ecr:CompleteLayerUpload",
           "ecr:PutImage",
           "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
           "ecr:DescribeRepositories",
-          "ecr:DescribeImages"
+          "ecr:DescribeImages",
+          "ecr:ListImages",
+          "ecr:ListTagsForResource"
         ]
-        Resource = [
-          "arn:aws:ecr:${var.region}:${var.account_id}:repository/${local.project_prefix}-log-enricher",
-          "arn:aws:ecr:${var.region}:${var.account_id}:repository/${local.project_prefix}-dashboard-generator"
+        Resource = local.ecr_lambda_repo_arns
+      },
+      {
+        # Repo lifecycle management (terraform/ecr stack)
+        Sid    = "EcrManageRepos"
+        Effect = "Allow"
+        Action = [
+          "ecr:CreateRepository",
+          "ecr:DeleteRepository",
+          "ecr:TagResource",
+          "ecr:UntagResource",
+          "ecr:PutImageScanningConfiguration",
+          "ecr:PutImageTagMutability",
+          "ecr:PutLifecyclePolicy",
+          "ecr:GetLifecyclePolicy",
+          "ecr:DeleteLifecyclePolicy",
+          "ecr:SetRepositoryPolicy",
+          "ecr:GetRepositoryPolicy",
+          "ecr:DeleteRepositoryPolicy"
         ]
+        Resource = local.ecr_lambda_repo_arns
+      },
+      {
+        Sid    = "LambdaManageAnalyticsFunctions"
+        Effect = "Allow"
+        Action = [
+          "lambda:CreateFunction",
+          "lambda:DeleteFunction",
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionCodeSigningConfig",
+          "lambda:UpdateFunctionCode",
+          "lambda:UpdateFunctionConfiguration",
+          "lambda:ListVersionsByFunction",
+          "lambda:TagResource",
+          "lambda:UntagResource",
+          "lambda:ListTags",
+          "lambda:AddPermission",
+          "lambda:RemovePermission",
+          "lambda:GetPolicy",
+          "lambda:PutFunctionConcurrency",
+          "lambda:DeleteFunctionConcurrency"
+        ]
+        Resource = local.lambda_function_arns
+      },
+      {
+        # DescribeLogGroups is required on refresh; it must target a log-group
+        # prefix (AWS does not allow it against a specific log-group ARN).
+        Sid      = "LogsDescribeLambdaGroups"
+        Effect   = "Allow"
+        Action   = "logs:DescribeLogGroups"
+        Resource = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/lambda/${local.project_prefix}-*"
+      },
+      {
+        Sid    = "LogsManageLambdaGroups"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:DeleteLogGroup",
+          "logs:PutRetentionPolicy",
+          "logs:DeleteRetentionPolicy",
+          "logs:TagResource",
+          "logs:UntagResource",
+          "logs:ListTagsForResource",
+          "logs:ListTagsLogGroup"
+        ]
+        Resource = concat(
+          local.lambda_log_group_arns,
+          local.lambda_log_group_arns_wildcard
+        )
+      },
+      {
+        Sid    = "SnsManageAnalyticsAlerts"
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic",
+          "sns:DeleteTopic",
+          "sns:GetTopicAttributes",
+          "sns:SetTopicAttributes",
+          "sns:ListTagsForResource",
+          "sns:TagResource",
+          "sns:UntagResource",
+          "sns:Subscribe",
+          "sns:Unsubscribe",
+          "sns:GetSubscriptionAttributes",
+          "sns:ListSubscriptionsByTopic"
+        ]
+        Resource = local.analytics_alerts_topic_arn
       },
       {
         Sid      = "SsmReadMaxMindLicense"
