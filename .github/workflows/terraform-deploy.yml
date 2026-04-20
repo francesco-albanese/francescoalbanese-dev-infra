@@ -3,10 +3,35 @@ name: Terraform Deploy
 on:
   push:
     branches: [main]
-    paths: [terraform/**]
+    paths: [terraform/environmental/**]
   pull_request:
-    paths: [terraform/**]
+    paths: [terraform/environmental/**]
   workflow_dispatch:
+    inputs:
+      log_enricher_image_tag:
+        description: "Image tag for log-enricher (git SHA or latest)"
+        required: false
+        type: string
+        default: "latest"
+      dashboard_generator_image_tag:
+        description: "Image tag for dashboard-generator (git SHA or latest)"
+        required: false
+        type: string
+        default: "latest"
+  workflow_call:
+    inputs:
+      log_enricher_image_tag:
+        required: false
+        type: string
+        default: "latest"
+      dashboard_generator_image_tag:
+        required: false
+        type: string
+        default: "latest"
+      auto_apply:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -55,6 +80,9 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        env:
+          TF_VAR_image_tag_log_enricher: ${{ inputs.log_enricher_image_tag || 'latest' }}
+          TF_VAR_image_tag_dashboard_generator: ${{ inputs.dashboard_generator_image_tag || 'latest' }}
         run: |
           set +e -o pipefail
           make environmental-plan ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-detailed-exitcode -no-color"
@@ -68,7 +96,9 @@ jobs:
   apply:
     name: Terraform Apply
     needs: plan
-    if: github.ref == 'refs/heads/main' && needs.plan.outputs.exitcode == '2'
+    if: |
+      needs.plan.outputs.exitcode == '2' &&
+      (github.ref == 'refs/heads/main' || inputs.auto_apply)
     runs-on: ubuntu-latest
     environment: sandbox
     steps:
@@ -99,4 +129,7 @@ jobs:
         run: make environmental-init ACCOUNT=sandbox AWS_PROFILE=
 
       - name: Terraform Apply
+        env:
+          TF_VAR_image_tag_log_enricher: ${{ inputs.log_enricher_image_tag || 'latest' }}
+          TF_VAR_image_tag_dashboard_generator: ${{ inputs.dashboard_generator_image_tag || 'latest' }}
         run: make environmental-apply ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-auto-approve"

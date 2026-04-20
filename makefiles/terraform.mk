@@ -18,6 +18,10 @@ environmental_KEY := $(PROJECT_NAME)/environmental/$(ACCOUNT)
 environmental_ACCOUNT := $(ACCOUNT)
 environmental_FLAGS := -var-file=env/$(ACCOUNT).tfvars
 
+ecr_KEY := $(PROJECT_NAME)/ecr/$(ACCOUNT)
+ecr_ACCOUNT := $(ACCOUNT)
+ecr_FLAGS := -var-file=env/$(ACCOUNT).tfvars
+
 tf-setup: ## install tfenv and tflint (macOS: use brew install terraform instead)
 tf-setup:
 	@echo "Installing Terraform tooling..."

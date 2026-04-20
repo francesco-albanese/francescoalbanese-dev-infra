@@ -1,0 +1,36 @@
+name: ECR Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ecr-deploy-sandbox
+  cancel-in-progress: false
+
+jobs:
+  ecr-deploy:
+    name: Deploy ECR stack
+    runs-on: ubuntu-latest
+    environment: sandbox
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS + Terraform
+        uses: ./.github/actions/configure-aws-env
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Terraform Init
+        run: make ecr-init ACCOUNT=sandbox AWS_PROFILE=
+
+      - name: Terraform Plan
+        run: make ecr-plan ACCOUNT=sandbox AWS_PROFILE=
+
+      - name: Terraform Apply
+        run: make ecr-apply ACCOUNT=sandbox AWS_PROFILE= TF_FLAGS="-auto-approve"
