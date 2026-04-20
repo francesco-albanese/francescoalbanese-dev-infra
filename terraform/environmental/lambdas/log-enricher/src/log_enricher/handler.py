@@ -269,30 +269,22 @@ def marker_key(alert: Alert, date_str: str) -> str:
     return f"alerts/{alert.type}/{date_str}/{alert.dedup_id}.sent"
 
 
-def alert_already_sent(key: str) -> bool:
-    try:
-        s3.head_object(Bucket=BUCKET, Key=key)
-        return True
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
-            return False
-        raise
-
-
-def mark_alert_sent(key: str) -> None:
-    s3.put_object(Bucket=BUCKET, Key=key, Body=b"")
-
-
 def publish_alert(alert: Alert, date_str: str) -> None:
+    # Atomic dedup via S3 conditional write: only one concurrent invocation
+    # creates the marker; the rest get PreconditionFailed and skip. Fail-closed
+    # on SNS errors — Lambda retry will find the marker and skip.
     key = marker_key(alert, date_str)
-    if alert_already_sent(key):
-        return
+    try:
+        s3.put_object(Bucket=BUCKET, Key=key, Body=b"", IfNoneMatch="*")
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "PreconditionFailed":
+            return
+        raise
     sns.publish(
         TopicArn=SNS_TOPIC_ARN,
         Subject="francescoalbanese.dev \u2014 Visitor Alert",
         Message=alert.message,
     )
-    mark_alert_sent(key)
 
 
 def load_records_for_prefix(prefix: str) -> list[EnrichedRecord]:

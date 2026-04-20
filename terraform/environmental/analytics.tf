@@ -242,7 +242,7 @@ resource "aws_iam_role_policy" "log_enricher" {
       {
         Sid      = "AlertDeduplication"
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject"]
+        Action   = ["s3:PutObject"]
         Resource = "${aws_s3_bucket.analytics.arn}/alerts/*"
       },
       {
