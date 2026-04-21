@@ -24,13 +24,12 @@ def get_dashboard_data(s3_client) -> dict:
 
 class TestVisitsByPeriod:
     def test_counts_today_this_week_this_month(self, s3_client):
-        # Freeze `now` at a midweek day so `this_week` (Mon-based) has room
-        # for prior-day records — otherwise the test fails when run on a Monday.
-        frozen_now = datetime(2026, 4, 15, 12, 0, 0, tzinfo=UTC)
+        # Freeze `now` at a Friday so `this_week` (Mon-based) has room for a
+        # prior-day record and day-1-of-month falls within the 14-day window.
+        frozen_now = datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC)
         today = frozen_now.date()
         yesterday = today - timedelta(days=1)
         this_month_only = today.replace(day=1)
-        window_only = today - timedelta(days=20)
 
         def ts(d: date) -> str:
             return f"{d.isoformat()}T12:00:00Z"
@@ -55,12 +54,6 @@ class TestVisitsByPeriod:
             this_month_only.isoformat(),
             [make_record(timestamp=ts(this_month_only))],
             suffix="c",
-        )
-        upload_enriched_records(
-            s3_client,
-            window_only.isoformat(),
-            [make_record(timestamp=ts(window_only))],
-            suffix="d",
         )
 
         with patch("dashboard_generator.handler.datetime") as mock_dt:
@@ -130,76 +123,6 @@ class TestTopPages:
 
         assert data["top_pages"][0]["path"] == "/"
         assert data["top_pages"][0]["count"] == 2
-
-
-class TestDeepBrowsers:
-    def test_detects_london_ip_with_3_plus_pages(self, s3_client):
-        today = date_str(0)
-        records = [
-            make_record(
-                client_ip="203.0.113.1",
-                path="/",
-                city="London",
-                country="United Kingdom",
-                rdns="host.barclays.co.uk",
-                timestamp=timestamp_str(0),
-            ),
-            make_record(
-                client_ip="203.0.113.1",
-                path="/projects",
-                city="London",
-                country="United Kingdom",
-                timestamp=timestamp_str(0),
-            ),
-            make_record(
-                client_ip="203.0.113.1",
-                path="/cv",
-                city="London",
-                country="United Kingdom",
-                timestamp=timestamp_str(0),
-            ),
-        ]
-        upload_enriched_records(s3_client, today, records)
-
-        invoke_handler(s3_client)
-        data = get_dashboard_data(s3_client)
-
-        assert len(data["deep_browsers"]) == 1
-        browser = data["deep_browsers"][0]
-        assert browser["city"] == "London"
-        assert set(browser["pages"]) == {"/", "/projects", "/cv"}
-
-    def test_excludes_non_target_geo(self, s3_client):
-        today = date_str(0)
-        records = [
-            make_record(
-                client_ip="1.1.1.1",
-                path="/",
-                city="Berlin",
-                country="Germany",
-                timestamp=timestamp_str(0),
-            ),
-            make_record(
-                client_ip="1.1.1.1",
-                path="/projects",
-                city="Berlin",
-                country="Germany",
-                timestamp=timestamp_str(0),
-            ),
-            make_record(
-                client_ip="1.1.1.1",
-                path="/cv",
-                city="Berlin",
-                country="Germany",
-                timestamp=timestamp_str(0),
-            ),
-        ]
-        upload_enriched_records(s3_client, today, records)
-
-        invoke_handler(s3_client)
-        data = get_dashboard_data(s3_client)
-
-        assert len(data["deep_browsers"]) == 0
 
 
 class TestReferrers:
@@ -307,7 +230,7 @@ class TestDailyTrend:
         invoke_handler(s3_client)
         data = get_dashboard_data(s3_client)
 
-        assert len(data["daily_trend"]) == 30
+        assert len(data["daily_trend"]) == 14
         today_entry = next(d for d in data["daily_trend"] if d["date"] == today)
         assert today_entry["count"] == 1
 
