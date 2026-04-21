@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 BUCKET = os.environ.get("ANALYTICS_BUCKET", "")
-DASHBOARD_WINDOW_DAYS = 30
+DASHBOARD_WINDOW_DAYS = 14
 PRESIGN_EXPIRY_SECONDS = 3600
 
 s3 = boto3.client("s3")
@@ -28,11 +28,9 @@ STATIC_ASSET_PATTERNS = re.compile(
     r")"
 )
 
-TARGET_COUNTRIES = {"United Kingdom", "United States"}
 SELF_DOMAINS = {"francescoalbanese.dev", "www.francescoalbanese.dev"}
 MOBILE_PATTERNS = re.compile(r"(?i)(iphone|android|mobile|ipod|blackberry|opera mini)")
 
-DEEP_BROWSE_MIN_PAGES = 3
 CITY_CLUSTER_MIN_IPS = 3
 
 
@@ -113,37 +111,6 @@ def compute_top_pages(records: list[EnrichedRecord], limit: int = 10) -> list[di
     return [{"path": path, "count": count} for path, count in sorted_pages]
 
 
-def compute_deep_browsers(records: list[EnrichedRecord]) -> list[dict[str, object]]:
-    ip_data: dict[str, EnrichedRecord] = {}
-    ip_pages: dict[str, set[str]] = defaultdict(set)
-
-    for r in records:
-        if r["country"] not in TARGET_COUNTRIES:
-            continue
-        if is_static_asset(r["path"]):
-            continue
-        ip_pages[r["client_ip"]].add(r["path"])
-        ip_data[r["client_ip"]] = r
-
-    browsers: list[dict[str, object]] = []
-    for ip, pages in ip_pages.items():
-        if len(pages) < DEEP_BROWSE_MIN_PAGES:
-            continue
-        meta = ip_data[ip]
-        browsers.append(
-            {
-                "client_ip": ip,
-                "city": meta["city"],
-                "country": meta["country"],
-                "pages": sorted(pages),
-                "user_agent": meta["user_agent"],
-                "rdns": meta.get("rdns", ""),
-                "referer": meta.get("referer", ""),
-            }
-        )
-    return browsers
-
-
 def compute_referrers(records: list[EnrichedRecord], limit: int = 10) -> list[dict[str, object]]:
     domain_counts: dict[str, int] = defaultdict(int)
     for r in records:
@@ -200,17 +167,6 @@ def compute_daily_trend(
 
 def compute_alert_history(records: list[EnrichedRecord]) -> list[dict[str, object]]:
     alerts: list[dict[str, object]] = []
-    for browser in compute_deep_browsers(records):
-        alerts.append(
-            {
-                "type": "deep_browse",
-                "city": browser["city"],
-                "country": browser["country"],
-                "pages": browser["pages"],
-                "rdns": browser.get("rdns", ""),
-            }
-        )
-
     city_ips: dict[str, set[str]] = defaultdict(set)
     for r in records:
         if r["city"]:
@@ -233,7 +189,6 @@ def handler(event: dict, context: object) -> dict:
         "visits": compute_visits(records, now),
         "top_cities": compute_top_cities(records),
         "top_pages": compute_top_pages(records),
-        "deep_browsers": compute_deep_browsers(records),
         "referrers": compute_referrers(records),
         "ua_breakdown": compute_ua_breakdown(records),
         "daily_trend": compute_daily_trend(records, now),

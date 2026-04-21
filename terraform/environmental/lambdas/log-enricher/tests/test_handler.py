@@ -107,6 +107,32 @@ class TestBotFiltering:
         records = get_enriched_records(s3)
         assert len(records) == 1
 
+    def test_filters_out_scanner_user_agents(self, aws_clients, mock_geoip_reader):
+        s3, _ = aws_clients
+        log_key = "cf-logs/E1234.2026-04-14-15.scannerua.gz"
+        scanner_agents = [
+            "curl/8.4.0",
+            "Wget/1.21.4",
+            "python-requests/2.31.0",
+            "Go-http-client/2.0",
+            "masscan/1.3.2",
+            "Nikto/2.5.0",
+            "Nuclei/3.0.0",
+        ]
+        lines = [make_cf_log_line(user_agent=ua) for ua in scanner_agents]
+        lines.append(make_cf_log_line(user_agent="Mozilla/5.0+real+user", c_ip="203.0.113.1"))
+        log_content = build_cf_log(lines)
+        upload_cf_log(s3, log_key, log_content)
+        event = make_s3_event(BUCKET_NAME, log_key)
+
+        with patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader):
+            from log_enricher.handler import handler
+
+            handler(event, None)
+
+        records = get_enriched_records(s3)
+        assert len(records) == 1
+
     def test_all_bot_traffic_produces_empty_enriched_file(self, aws_clients, mock_geoip_reader):
         s3, _ = aws_clients
         log_key = "cf-logs/E1234.2026-04-14-15.allbot.gz"
@@ -126,6 +152,80 @@ class TestBotFiltering:
 
         records = get_enriched_records(s3)
         assert len(records) == 0
+
+
+class TestScannerPathFiltering:
+    def test_drops_known_scanner_probes(self, aws_clients, mock_geoip_reader):
+        s3, _ = aws_clients
+        log_key = "cf-logs/E1234.2026-04-14-15.scanpaths.gz"
+        scanner_paths = [
+            "/xmlrpc.php",
+            "//xmlrpc.php",
+            "/.git/config",
+            "/.env",
+            "/wp-login.php",
+            "/wp-admin/admin-ajax.php",
+            "/phpmyadmin/index.php",
+            "//site/wp-includes/wlwmanifest.xml",
+            "//wordpress/wp-includes/wlwmanifest.xml",
+            "/Alvin9999/https/fanfan1.net/daohang/",
+        ]
+        lines = [make_cf_log_line(uri_stem=p) for p in scanner_paths]
+        lines.append(make_cf_log_line(uri_stem="/", c_ip="203.0.113.1"))
+        log_content = build_cf_log(lines)
+        upload_cf_log(s3, log_key, log_content)
+        event = make_s3_event(BUCKET_NAME, log_key)
+
+        with patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader):
+            from log_enricher.handler import handler
+
+            handler(event, None)
+
+        records = get_enriched_records(s3)
+        assert len(records) == 1
+        assert records[0]["path"] == "/"
+
+    def test_legit_paths_survive(self, aws_clients, mock_geoip_reader):
+        s3, _ = aws_clients
+        log_key = "cf-logs/E1234.2026-04-14-15.legitpaths.gz"
+        legit_paths = ["/", "/projects", "/cv", "/about", "/_astro/chunk.abc.js"]
+        lines = [make_cf_log_line(uri_stem=p, c_ip="203.0.113.1") for p in legit_paths]
+        log_content = build_cf_log(lines)
+        upload_cf_log(s3, log_key, log_content)
+        event = make_s3_event(BUCKET_NAME, log_key)
+
+        with patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader):
+            from log_enricher.handler import handler
+
+            handler(event, None)
+
+        records = get_enriched_records(s3)
+        assert len(records) == len(legit_paths)
+
+
+class TestMethodFiltering:
+    def test_drops_non_get_head(self, aws_clients, mock_geoip_reader):
+        s3, _ = aws_clients
+        log_key = "cf-logs/E1234.2026-04-14-15.methods.gz"
+        lines = [
+            make_cf_log_line(method="POST", c_ip="203.0.113.1"),
+            make_cf_log_line(method="OPTIONS", c_ip="203.0.113.1"),
+            make_cf_log_line(method="DELETE", c_ip="203.0.113.1"),
+            make_cf_log_line(method="GET", c_ip="203.0.113.2"),
+            make_cf_log_line(method="HEAD", c_ip="203.0.113.3"),
+        ]
+        log_content = build_cf_log(lines)
+        upload_cf_log(s3, log_key, log_content)
+        event = make_s3_event(BUCKET_NAME, log_key)
+
+        with patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader):
+            from log_enricher.handler import handler
+
+            handler(event, None)
+
+        records = get_enriched_records(s3)
+        assert len(records) == 2
+        assert {r["method"] for r in records} == {"GET", "HEAD"}
 
 
 class TestGeoIPEnrichment:
@@ -176,87 +276,6 @@ class TestGeoIPEnrichment:
         assert len(records) == 1
         assert records[0]["city"] == ""
         assert records[0]["country"] == ""
-
-
-class TestDeepBrowseAlert:
-    def test_fires_when_london_ip_visits_3_plus_pages(self, aws_clients, mock_geoip_reader):
-        s3, sns = aws_clients
-        log_key = "cf-logs/E1234.2026-04-14-15.deep1.gz"
-        log_content = build_cf_log(
-            [
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/projects"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/cv"),
-            ]
-        )
-        upload_cf_log(s3, log_key, log_content)
-        event = make_s3_event(BUCKET_NAME, log_key)
-
-        with (
-            patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader),
-            patch("log_enricher.handler.reverse_dns", return_value="host.example.com"),
-            patch("log_enricher.handler.publish_alert") as mock_publish,
-        ):
-            from log_enricher.handler import handler
-
-            handler(event, None)
-
-        mock_publish.assert_called()
-        alert = mock_publish.call_args[0][0]
-        assert alert.type == "deep_browse"
-        assert alert.dedup_id == "203.0.113.1"
-        assert "Deep Browse" in alert.message
-        assert "London" in alert.message
-
-    def test_excludes_static_assets_from_page_count(self, aws_clients, mock_geoip_reader):
-        s3, sns = aws_clients
-        log_key = "cf-logs/E1234.2026-04-14-15.static1.gz"
-        log_content = build_cf_log(
-            [
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/_astro/chunk.abc123.js"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/favicon.ico"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/robots.txt"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/og.png"),
-            ]
-        )
-        upload_cf_log(s3, log_key, log_content)
-        event = make_s3_event(BUCKET_NAME, log_key)
-
-        with (
-            patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader),
-            patch("log_enricher.handler.reverse_dns", return_value=""),
-            patch("log_enricher.handler.publish_alert") as mock_publish,
-        ):
-            from log_enricher.handler import handler
-
-            handler(event, None)
-
-        mock_publish.assert_not_called()
-
-    def test_does_not_fire_for_non_target_geo(self, aws_clients, mock_geoip_reader):
-        s3, sns = aws_clients
-        log_key = "cf-logs/E1234.2026-04-14-15.nontarget.gz"
-        log_content = build_cf_log(
-            [
-                make_cf_log_line(c_ip="192.0.2.1", uri_stem="/"),
-                make_cf_log_line(c_ip="192.0.2.1", uri_stem="/projects"),
-                make_cf_log_line(c_ip="192.0.2.1", uri_stem="/cv"),
-            ]
-        )
-        upload_cf_log(s3, log_key, log_content)
-        event = make_s3_event(BUCKET_NAME, log_key)
-
-        with (
-            patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader),
-            patch("log_enricher.handler.reverse_dns", return_value=""),
-            patch("log_enricher.handler.publish_alert") as mock_publish,
-        ):
-            from log_enricher.handler import handler
-
-            handler(event, None)
-
-        mock_publish.assert_not_called()
 
 
 class TestCityClusterAlert:
@@ -326,14 +345,14 @@ class TestEdgeCases:
 
 
 class TestAlertDeduplication:
-    def test_same_alert_not_sent_twice(self, aws_clients, mock_geoip_reader):
+    def test_same_city_cluster_alert_not_sent_twice(self, aws_clients, mock_geoip_reader):
         s3, sns = aws_clients
 
         log_content = build_cf_log(
             [
                 make_cf_log_line(c_ip="203.0.113.1", uri_stem="/"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/projects"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/cv"),
+                make_cf_log_line(c_ip="203.0.113.2", uri_stem="/"),
+                make_cf_log_line(c_ip="203.0.113.3", uri_stem="/"),
             ]
         )
 
@@ -391,14 +410,14 @@ class TestRdnsCache:
 
 
 class TestAlertMarkerKey:
-    def test_dedup_marker_uses_type_date_ip(self, aws_clients, mock_geoip_reader):
+    def test_dedup_marker_uses_type_date_city(self, aws_clients, mock_geoip_reader):
         s3, _ = aws_clients
         log_key = "cf-logs/E1234.2026-04-14-15.marker.gz"
         log_content = build_cf_log(
             [
                 make_cf_log_line(c_ip="203.0.113.1", uri_stem="/"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/projects"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/cv"),
+                make_cf_log_line(c_ip="203.0.113.2", uri_stem="/"),
+                make_cf_log_line(c_ip="203.0.113.3", uri_stem="/"),
             ]
         )
         upload_cf_log(s3, log_key, log_content)
@@ -412,40 +431,6 @@ class TestAlertMarkerKey:
 
             handler(event, None)
 
-        response = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix="alerts/deep_browse/2026-04-14/")
+        response = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix="alerts/city_cluster/2026-04-14/")
         keys = [obj["Key"] for obj in response.get("Contents", [])]
-        assert "alerts/deep_browse/2026-04-14/203.0.113.1.sent" in keys
-
-
-class TestAlertMessageContent:
-    def test_deep_browse_alert_includes_pages_ua_rdns_referer(self, aws_clients, mock_geoip_reader):
-        s3, sns = aws_clients
-        log_key = "cf-logs/E1234.2026-04-14-15.alertcontent.gz"
-        log_content = build_cf_log(
-            [
-                make_cf_log_line(
-                    c_ip="203.0.113.1",
-                    uri_stem="/",
-                    referer="https://linkedin.com/in/recruiter",
-                ),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/projects"),
-                make_cf_log_line(c_ip="203.0.113.1", uri_stem="/cv"),
-            ]
-        )
-        upload_cf_log(s3, log_key, log_content)
-        event = make_s3_event(BUCKET_NAME, log_key)
-
-        with (
-            patch("log_enricher.handler.get_geoip_reader", return_value=mock_geoip_reader),
-            patch("log_enricher.handler.reverse_dns", return_value="host-1.barclays.co.uk"),
-            patch("log_enricher.handler.publish_alert") as mock_publish,
-        ):
-            from log_enricher.handler import handler
-
-            handler(event, None)
-
-        alert = mock_publish.call_args_list[0][0][0]
-        assert "/projects" in alert.message
-        assert "/cv" in alert.message
-        assert "barclays.co.uk" in alert.message
-        assert "linkedin.com" in alert.message
+        assert "alerts/city_cluster/2026-04-14/london.sent" in keys

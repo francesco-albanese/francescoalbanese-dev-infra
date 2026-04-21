@@ -112,7 +112,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "analytics" {
       prefix = "enriched/"
     }
     expiration {
-      days = 90
+      days = 14
     }
   }
 
