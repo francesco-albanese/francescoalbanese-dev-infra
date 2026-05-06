@@ -168,19 +168,8 @@ resource "aws_iam_role_policy" "log_enricher" {
       {
         Sid      = "WriteEnriched"
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject"]
+        Action   = ["s3:PutObject"]
         Resource = "${aws_s3_bucket.analytics.arn}/enriched/*"
-      },
-      {
-        Sid      = "ListEnriched"
-        Effect   = "Allow"
-        Action   = ["s3:ListBucket"]
-        Resource = aws_s3_bucket.analytics.arn
-        Condition = {
-          StringLike = {
-            "s3:prefix" = ["enriched/*"]
-          }
-        }
       },
       {
         Sid    = "CloudWatchLogs"
