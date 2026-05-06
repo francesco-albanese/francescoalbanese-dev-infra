@@ -18,7 +18,6 @@ locals {
     for n in local.lambda_names : "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/lambda/${local.project_prefix}-${n}"
   ]
   lambda_log_group_arns_wildcard = [for a in local.lambda_log_group_arns : "${a}:*"]
-  analytics_alerts_topic_arn     = "arn:aws:sns:${var.region}:${var.account_id}:${local.project_prefix}-analytics-alerts"
   ecr_lambda_repo_arns = [
     for n in local.lambda_names : "arn:aws:ecr:${var.region}:${var.account_id}:repository/${local.project_prefix}-${n}"
   ]

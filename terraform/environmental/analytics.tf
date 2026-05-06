@@ -126,17 +126,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "analytics" {
       days = 7
     }
   }
-
-  rule {
-    id     = "alerts"
-    status = "Enabled"
-    filter {
-      prefix = "alerts/"
-    }
-    expiration {
-      days = 30
-    }
-  }
 }
 
 # CloudFront v1 access logging writes directly to the analytics bucket via the
@@ -192,18 +181,6 @@ resource "aws_iam_role_policy" "log_enricher" {
             "s3:prefix" = ["enriched/*"]
           }
         }
-      },
-      {
-        Sid      = "AlertDeduplication"
-        Effect   = "Allow"
-        Action   = ["s3:PutObject"]
-        Resource = "${aws_s3_bucket.analytics.arn}/alerts/*"
-      },
-      {
-        Sid      = "PublishAlerts"
-        Effect   = "Allow"
-        Action   = ["sns:Publish"]
-        Resource = aws_sns_topic.analytics_alerts.arn
       },
       {
         Sid    = "CloudWatchLogs"
@@ -313,7 +290,6 @@ resource "aws_lambda_function" "log_enricher" {
   environment {
     variables = {
       ANALYTICS_BUCKET = aws_s3_bucket.analytics.id
-      SNS_TOPIC_ARN    = aws_sns_topic.analytics_alerts.arn
       GEOIP_DB_PATH    = "/opt/GeoLite2-City.mmdb"
     }
   }
@@ -368,22 +344,6 @@ resource "aws_s3_bucket_notification" "analytics" {
   }
 
   depends_on = [aws_lambda_permission.s3_invoke_log_enricher]
-}
-
-# ─── Analytics: SNS ──────────────────────────────────────────────────────────
-
-resource "aws_sns_topic" "analytics_alerts" {
-  name = "${local.project_prefix}-analytics-alerts"
-
-  tags = merge(local.analytics_tags, {
-    Name = "${local.project_prefix}-analytics-alerts"
-  })
-}
-
-resource "aws_sns_topic_subscription" "analytics_email" {
-  topic_arn = aws_sns_topic.analytics_alerts.arn
-  protocol  = "email"
-  endpoint  = var.analytics_alert_email
 }
 
 # ─── Analytics: Outputs ──────────────────────────────────────────────────────
