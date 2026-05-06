@@ -1,6 +1,6 @@
 # Permissions boundary — caps privileges for any role created by infra deploy.
 # Covers both infra deploy roles (site sync + CF invalidation) and lambda
-# runtime roles (analytics bucket access + SNS publish + CloudWatch logs).
+# runtime roles (analytics bucket access + CloudWatch logs).
 data "aws_iam_policy_document" "infra_deploy_boundary" {
   statement {
     sid    = "AllowS3ManagedBuckets"
@@ -28,13 +28,6 @@ data "aws_iam_policy_document" "infra_deploy_boundary" {
       variable = "aws:ResourceTag/franco:terraform_stack"
       values   = ["francescoalbanese-dev-infra"]
     }
-  }
-
-  statement {
-    sid       = "AllowSNSPublishAnalyticsAlerts"
-    effect    = "Allow"
-    actions   = ["sns:Publish"]
-    resources = [local.analytics_alerts_topic_arn]
   }
 
   statement {

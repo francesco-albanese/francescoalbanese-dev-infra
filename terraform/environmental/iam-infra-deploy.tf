@@ -41,7 +41,7 @@ data "aws_iam_policy_document" "github_actions_infra_deploy" {
     data.aws_iam_policy_document.infra_deploy_iam.json,
     data.aws_iam_policy_document.infra_deploy_ecr.json,
     data.aws_iam_policy_document.infra_deploy_lambda_logs.json,
-    data.aws_iam_policy_document.infra_deploy_sns_ssm.json,
+    data.aws_iam_policy_document.infra_deploy_sts_ssm.json,
   ]
 }
 

@@ -1,6 +1,5 @@
 import gzip
 import json
-import os
 from unittest.mock import MagicMock
 
 import boto3
@@ -8,7 +7,6 @@ import pytest
 from moto import mock_aws
 
 BUCKET_NAME = "test-analytics-bucket"
-SNS_TOPIC_ARN = "arn:aws:sns:eu-west-2:123456789012:test-alerts"
 
 CF_LOG_HEADER = (
     "#Version: 1.0\n"
@@ -137,27 +135,7 @@ def aws_env(monkeypatch):
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-2")
     monkeypatch.setenv("ANALYTICS_BUCKET", BUCKET_NAME)
-    monkeypatch.setenv("SNS_TOPIC_ARN", SNS_TOPIC_ARN)
     monkeypatch.setenv("GEOIP_DB_PATH", "/tmp/fake.mmdb")
-
-
-@pytest.fixture
-def s3_client(aws_env):
-    with mock_aws():
-        client = boto3.client("s3", region_name="eu-west-2")
-        client.create_bucket(
-            Bucket=BUCKET_NAME,
-            CreateBucketConfiguration={"LocationConstraint": "eu-west-2"},
-        )
-        yield client
-
-
-@pytest.fixture
-def sns_client(aws_env):
-    with mock_aws():
-        client = boto3.client("sns", region_name="eu-west-2")
-        client.create_topic(Name="test-alerts")
-        yield client
 
 
 @pytest.fixture
@@ -168,10 +146,7 @@ def aws_clients(aws_env):
             Bucket=BUCKET_NAME,
             CreateBucketConfiguration={"LocationConstraint": "eu-west-2"},
         )
-        sns = boto3.client("sns", region_name="eu-west-2")
-        topic = sns.create_topic(Name="test-alerts")
-        os.environ["SNS_TOPIC_ARN"] = topic["TopicArn"]
-        yield s3, sns
+        yield s3
 
 
 def upload_cf_log(s3_client, key: str, log_content: str):

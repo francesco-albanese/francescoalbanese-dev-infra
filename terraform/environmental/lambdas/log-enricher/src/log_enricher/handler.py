@@ -4,27 +4,22 @@ import logging
 import os
 import re
 import socket
-from collections import defaultdict
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
-from typing import TypedDict, cast
+from typing import TypedDict
 from urllib.parse import unquote
 
 import boto3
 import geoip2.database
 import geoip2.errors
-from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 BUCKET = os.environ.get("ANALYTICS_BUCKET", "")
-SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 GEOIP_DB_PATH = os.environ.get("GEOIP_DB_PATH", "/opt/GeoLite2-City.mmdb")
 
 s3 = boto3.client("s3")
-sns = boto3.client("sns")
 
 BOT_PATTERNS = re.compile(
     r"(?i)("
@@ -65,10 +60,6 @@ STATIC_ASSET_PATTERNS = re.compile(
 # (AWSLogs/acct/CloudFront/dist/2026/04/14/...).
 DATE_IN_KEY = re.compile(r"(\d{4})[-/](\d{2})[-/](\d{2})")
 
-SLUG_STRIP = re.compile(r"[^a-z0-9]+")
-
-CITY_CLUSTER_MIN_IPS = 3
-
 
 class CFEntry(TypedDict):
     date: str
@@ -94,13 +85,6 @@ class EnrichedRecord(TypedDict):
     status: int
     bytes_sent: int
     method: str
-
-
-@dataclass(frozen=True)
-class Alert:
-    type: str  # "city_cluster"
-    dedup_id: str  # slugified city
-    message: str
 
 
 def get_geoip_reader() -> geoip2.database.Reader:
@@ -129,10 +113,6 @@ def is_scanner_path(path: str) -> bool:
 
 def is_static_asset(path: str) -> bool:
     return bool(STATIC_ASSET_PATTERNS.search(path))
-
-
-def slugify(s: str) -> str:
-    return SLUG_STRIP.sub("-", s.lower()).strip("-") or "unknown"
 
 
 def event_date_from_key(key: str) -> datetime:
@@ -242,58 +222,6 @@ def enrich_entry(
     )
 
 
-def check_city_cluster(records: list[EnrichedRecord]) -> list[Alert]:
-    city_ips: dict[str, set[str]] = defaultdict(set)
-    for r in records:
-        if r["city"]:
-            city_ips[r["city"]].add(r["client_ip"])
-
-    alerts: list[Alert] = []
-    for city, ips in city_ips.items():
-        if len(ips) < CITY_CLUSTER_MIN_IPS:
-            continue
-        message = (
-            f"\U0001f514 City Cluster Alert — {city}\n\n"
-            f"{len(ips)} unique visitors from {city} visited your site today."
-        )
-        alerts.append(Alert(type="city_cluster", dedup_id=slugify(city), message=message))
-    return alerts
-
-
-def marker_key(alert: Alert, date_str: str) -> str:
-    return f"alerts/{alert.type}/{date_str}/{alert.dedup_id}.sent"
-
-
-def publish_alert(alert: Alert, date_str: str) -> None:
-    # Atomic dedup via S3 conditional write: only one concurrent invocation
-    # creates the marker; the rest get PreconditionFailed and skip. Fail-closed
-    # on SNS errors — Lambda retry will find the marker and skip.
-    key = marker_key(alert, date_str)
-    try:
-        s3.put_object(Bucket=BUCKET, Key=key, Body=b"", IfNoneMatch="*")
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") == "PreconditionFailed":
-            return
-        raise
-    sns.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Subject="francescoalbanese.dev — Visitor Alert",
-        Message=alert.message,
-    )
-
-
-def load_records_for_prefix(prefix: str) -> list[EnrichedRecord]:
-    records: list[EnrichedRecord] = []
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            body = s3.get_object(Bucket=BUCKET, Key=obj["Key"])["Body"].read()
-            for line in body.decode("utf-8").strip().split("\n"):
-                if line:
-                    records.append(cast(EnrichedRecord, json.loads(line)))
-    return records
-
-
 def handler(event: dict, context: object) -> None:
     record = event["Records"][0]
     bucket = record["s3"]["bucket"]["name"]
@@ -317,7 +245,6 @@ def handler(event: dict, context: object) -> None:
 
     event_date = event_date_from_key(key)
     date_partition = f"{event_date.year}/{event_date.month:02d}/{event_date.day:02d}"
-    date_str = event_date.strftime("%Y-%m-%d")
 
     filename = key.split("/")[-1].replace(".gz", ".jsonl")
     output_key = f"enriched/{date_partition}/{filename}"
@@ -325,15 +252,4 @@ def handler(event: dict, context: object) -> None:
     jsonl = "\n".join(json.dumps(r) for r in enriched) if enriched else ""
     s3.put_object(Bucket=BUCKET, Key=output_key, Body=jsonl.encode("utf-8"))
 
-    day_prefix = f"enriched/{date_partition}/"
-    day_records = load_records_for_prefix(day_prefix)
-
-    for alert in check_city_cluster(day_records):
-        publish_alert(alert, date_str)
-
-    logger.info(
-        "Processed %d entries, enriched %d, day total %d",
-        len(entries),
-        len(enriched),
-        len(day_records),
-    )
+    logger.info("Processed %d entries, enriched %d", len(entries), len(enriched))

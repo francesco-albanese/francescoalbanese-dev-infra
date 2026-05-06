@@ -43,8 +43,3 @@ variable "image_tag_dashboard_generator" {
   default     = "latest"
 }
 
-variable "analytics_alert_email" {
-  description = "Email address subscribed to analytics SNS alerts"
-  type        = string
-  default     = "hello@francescoalbanese.dev"
-}

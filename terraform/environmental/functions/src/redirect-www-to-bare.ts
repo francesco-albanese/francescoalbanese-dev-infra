@@ -20,7 +20,8 @@ export function handler(
 		return FORBIDDEN;
 	}
 
-	const ua = event.request.headers["user-agent"]?.value ?? "";
+	const uaHeader = event.request.headers["user-agent"];
+	const ua = uaHeader ? uaHeader.value : "";
 	if (BOT_UA.test(ua)) {
 		return FORBIDDEN;
 	}
