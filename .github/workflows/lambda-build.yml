@@ -32,7 +32,7 @@ jobs:
     outputs:
       lambdas: ${{ steps.detect.outputs.lambdas }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: detect
         run: |
           lambdas=$(find terraform/environmental/lambdas -maxdepth 2 -name pyproject.toml \
@@ -54,7 +54,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
