@@ -83,7 +83,7 @@ jobs:
       - name: Cache GeoLite2-City database (weekly)
         if: steps.geoip.outputs.include == 'true'
         id: cache-geoip
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: terraform/environmental/lambdas/data/GeoLite2-City.mmdb
           key: geolite2-city-${{ steps.week.outputs.iso }}
